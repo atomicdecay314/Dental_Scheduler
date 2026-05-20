@@ -27,7 +27,6 @@ class Doctor(Base):
     # e.g. "Dr. Smith" — displayed to patients and in confirmations
 
     appointments = relationship("Appointment", back_populates="doctor")
-    procedures = relationship("doctor_procedures")  # resolved via association table
 
 
 class Room(Base):
