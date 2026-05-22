@@ -2,4 +2,4 @@ fastapi
 uvicorn
 sqlalchemy
 pydantic
-anthropic
+google-genai

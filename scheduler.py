@@ -63,31 +63,109 @@ def is_room_available(db: Session, room_id: int, start: datetime, end: datetime)
     return conflict is None
 
 
-def find_available_slot(
+def score_idle_time(db: Session, doctor_id: int, room_id: int, start: datetime, end: datetime) -> float:
+    """
+    Lower score = less idle time = better fit.
+
+    Sums the gaps between the proposed slot and the nearest existing appointments
+    before and after it, for both the doctor and room. A slot that tightly fills
+    a gap scores lower than one that creates a long empty stretch.
+    If no existing appointments exist for a resource, that gap is treated as a
+    large number so we prefer filling around already-busy doctors/rooms.
+    """
+    def gap_score(filter_before: list, filter_after: list) -> float:
+        prev = (
+            db.query(Appointment)
+            .filter(*filter_before)
+            .order_by(Appointment.end_time.desc())
+            .first()
+        )
+        nxt = (
+            db.query(Appointment)
+            .filter(*filter_after)
+            .order_by(Appointment.start_time)
+            .first()
+        )
+        before = (start - prev.end_time).total_seconds() if prev else 86_400
+        after  = (nxt.start_time - end).total_seconds()  if nxt  else 86_400
+        return before + after
+
+    doctor_score = gap_score(
+        [Appointment.doctor_id == doctor_id, Appointment.end_time <= start],
+        [Appointment.doctor_id == doctor_id, Appointment.start_time >= end],
+    )
+    room_score = gap_score(
+        [Appointment.room_id == room_id, Appointment.end_time <= start],
+        [Appointment.room_id == room_id, Appointment.start_time >= end],
+    )
+    return doctor_score + room_score
+
+
+def find_best_slot(
     db: Session,
     procedure: str,
     start: datetime,
     end: datetime,
-    preferred_doctor_id: int | None = None,
 ) -> tuple[Doctor, Room] | None:
     """
-    Find any (doctor, room) pair that can handle the procedure in the given window.
-    If a preferred_doctor_id is provided, tries that doctor first.
-    Returns None if nothing is available.
+    Return the available (doctor, room) pair that minimises idle time around
+    the proposed slot. Returns None if nothing is available.
     """
     doctors = get_doctors_for_procedure(db, procedure)
-    rooms = get_rooms_for_procedure(db, procedure)
+    rooms   = get_rooms_for_procedure(db, procedure)
 
-    if preferred_doctor_id:
-        doctors.sort(key=lambda d: d.id != preferred_doctor_id)
-        # moves the preferred doctor to the front without filtering others out
+    best: tuple[Doctor, Room] | None = None
+    best_score = float("inf")
 
     for doctor in doctors:
         if not is_doctor_available(db, doctor.id, start, end):
             continue
         for room in rooms:
-            if is_room_available(db, room.id, start, end):
-                return doctor, room
+            if not is_room_available(db, room.id, start, end):
+                continue
+            score = score_idle_time(db, doctor.id, room.id, start, end)
+            if score < best_score:
+                best_score = score
+                best = (doctor, room)
+
+    return best
+
+
+def find_next_available_slot(
+    db: Session,
+    procedure: str,
+    from_time: datetime,
+    duration_minutes: int = 60,
+    clinic_start: int = 9,
+    clinic_end: int = 17,
+    max_days: int = 7,
+) -> tuple[Doctor, Room, datetime] | None:
+    """
+    Scan forward from from_time (in hourly steps, within clinic hours) to find
+    the next available (doctor, room, start) for the procedure.
+    Looks up to max_days ahead. Returns None if nothing found.
+    """
+    from datetime import timedelta
+
+    slot = from_time.replace(minute=0, second=0, microsecond=0)
+    # Start from the next hour if the requested time is already taken
+    slot += timedelta(hours=1)
+
+    deadline = from_time + timedelta(days=max_days)
+
+    while slot < deadline:
+        # Skip outside clinic hours
+        if slot.hour < clinic_start or slot.hour >= clinic_end:
+            slot = slot.replace(hour=clinic_start) + timedelta(days=1) if slot.hour >= clinic_end \
+                else slot.replace(hour=clinic_start)
+            continue
+
+        end = slot + timedelta(minutes=duration_minutes)
+        result = find_best_slot(db, procedure, slot, end)
+        if result:
+            return result[0], result[1], slot
+
+        slot += timedelta(hours=1)
 
     return None
 

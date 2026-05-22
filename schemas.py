@@ -81,14 +81,23 @@ class AppointmentRead(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Slots
+# ---------------------------------------------------------------------------
+
+class SlotOption(BaseModel):
+    start_time: datetime
+    end_time: datetime
+    doctor: str
+    doctor_id: int
+    room: str
+    room_id: int
+    idle_time_score: float
+
+
+# ---------------------------------------------------------------------------
 # Chatbot
 # ---------------------------------------------------------------------------
 
-class ChatMessage(BaseModel):
-    role: str        # "user" or "assistant"
-    content: str
-
 class ChatRequest(BaseModel):
-    messages: list[ChatMessage]
-    # Full conversation history sent by the client each turn so the
-    # API endpoint stays stateless
+    session_id: str   # identifies the conversation; use any unique string per user
+    message: str      # the latest message from the receptionist

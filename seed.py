@@ -1,23 +1,24 @@
 from database import Base, engine, SessionLocal
 from models import Doctor, Room, Patient, doctor_procedures, room_procedures
 
-# Creates all tables defined in models.py if they don't already exist
 Base.metadata.create_all(bind=engine)
 
 
 def seed():
     db = SessionLocal()
     try:
-        # --- Doctors ---
-        # Each doctor is seeded with a name; their procedure skills are inserted
-        # separately into the doctor_procedures association table below.
+        # Skip if already seeded — prevents duplicates on repeated runs
+        if db.query(Doctor).first():
+            print("Database already seeded, skipping.")
+            return
+
         doctors = [
-            Doctor(name="Dr. Palash Mehta"),    # id=1 — general dentist
-            Doctor(name="Dr. Varun Kumar"),      # id=2 — oral surgeon
-            Doctor(name="Dr. Rhea Singh"),    # id=3 — orthodontist
+            Doctor(name="Dr. Palash Mehta"),
+            Doctor(name="Dr. Varun Kumar"),
+            Doctor(name="Dr. Rhea Singh"),
         ]
         db.add_all(doctors)
-        db.flush()  # assigns IDs without committing, so we can use them below
+        db.flush()
 
         db.execute(doctor_procedures.insert(), [
             {"doctor_id": doctors[0].id, "procedure": "cleaning"},
