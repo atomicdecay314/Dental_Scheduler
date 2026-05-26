@@ -14,7 +14,6 @@ class DoctorCreate(DoctorBase):
 
 class DoctorRead(DoctorBase):
     id: int
-    procedures: list[str] = []
 
     model_config = {"from_attributes": True}
 
@@ -31,7 +30,6 @@ class RoomCreate(RoomBase):
 
 class RoomRead(RoomBase):
     id: int
-    procedures: list[str] = []
 
     model_config = {"from_attributes": True}
 
