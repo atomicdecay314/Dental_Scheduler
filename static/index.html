@@ -378,7 +378,7 @@
       doctors.forEach(d => {
         const a = lookup[`${d.id}_${h}`];
         if (a) {
-          html += `<td class="border-b border-r border-border-subtle p-1 h-24 align-top">
+          html += `<td class="border-b border-r border-border-subtle p-1 h-24 align-top relative">
             <div class="absolute inset-1 bg-clinical-blue-tint border-l-4 border-primary-container rounded-lg p-3 flex flex-col justify-center min-h-[88px]">
               <h4 class="text-label-md font-bold text-on-primary-fixed-variant">${a.patient.name}</h4>
               <p class="text-[12px] text-secondary mt-0.5 font-medium">${a.procedure.replace(/_/g,' ')}</p>
