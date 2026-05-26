@@ -145,8 +145,6 @@ def find_next_available_slot(
     the next available (doctor, room, start) for the procedure.
     Looks up to max_days ahead. Returns None if nothing found.
     """
-    from datetime import timedelta
-
     slot = from_time.replace(minute=0, second=0, microsecond=0)
     # Start from the next hour if the requested time is already taken
     slot += timedelta(hours=1)
@@ -156,8 +154,10 @@ def find_next_available_slot(
     while slot < deadline:
         # Skip outside clinic hours
         if slot.hour < clinic_start or slot.hour >= clinic_end:
-            slot = slot.replace(hour=clinic_start) + timedelta(days=1) if slot.hour >= clinic_end \
-                else slot.replace(hour=clinic_start)
+            if slot.hour >= clinic_end:
+                slot = slot.replace(hour=clinic_start) + timedelta(days=1)
+            else:
+                slot = slot.replace(hour=clinic_start)
             continue
 
         end = slot + timedelta(minutes=duration_minutes)

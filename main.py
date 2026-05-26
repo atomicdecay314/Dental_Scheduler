@@ -11,12 +11,8 @@ from sqlalchemy.orm import Session
 
 import scheduler
 from database import Base, engine, SessionLocal
-from models import Doctor, Appointment
+from models import Doctor, Room, Patient, Appointment
 from schemas import ChatRequest, AppointmentRead, SlotOption, DoctorRead
-
-# ---------------------------------------------------------------------------
-# App setup
-# ---------------------------------------------------------------------------
 
 Base.metadata.create_all(bind=engine)
 
@@ -40,20 +36,12 @@ VALID_PROCEDURES = {
 
 VALID_INTENTS = {"book", "list", "cancel", "greet", "unknown"}
 
-# ---------------------------------------------------------------------------
-# DB dependency
-# ---------------------------------------------------------------------------
-
 def get_db():
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
-
-# ---------------------------------------------------------------------------
-# Gemini extraction
-# ---------------------------------------------------------------------------
 
 EXTRACTION_PROMPT = """Extract from this dental clinic message. Return JSON only, no markdown.
 Today: {today} ({weekday}).
@@ -100,28 +88,20 @@ def extract(message: str) -> dict:
     return {"intent": intent, "procedure": procedure, "datetime": start_time, "patient_name": patient}
 
 
-# ---------------------------------------------------------------------------
-# Conversation state
-# ---------------------------------------------------------------------------
-
 CONFIRM_YES = re.compile(r"^(yes|confirm|ok|okay|sure|go ahead|book it|yep|y)$", re.IGNORECASE)
 CONFIRM_NO  = re.compile(r"^(no|change|different|another|nope|n)$", re.IGNORECASE)
 
 
 def fresh_state() -> dict:
     return {
-        "patient_name":          None,
-        "procedure":             None,
-        "start_time":            None,
+        "patient_name": None,
+        "procedure": None,
+        "start_time": None,
         "recommended_doctor_id": None,
-        "recommended_room_id":   None,
+        "recommended_room_id": None,
         "awaiting_confirmation": False,
     }
 
-
-# ---------------------------------------------------------------------------
-# Chat endpoint
-# ---------------------------------------------------------------------------
 
 @app.post("/chat")
 def chat(request: ChatRequest, db: Session = Depends(get_db)):
@@ -152,8 +132,8 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 state["start_time"] = None
                 return {"reply": f"That slot was just taken. Please try a different time. ({e})"}
 
-            doctor = db.get(__import__("models").Doctor, state["recommended_doctor_id"])
-            room   = db.get(__import__("models").Room,   state["recommended_room_id"])
+            doctor = db.get(Doctor, state["recommended_doctor_id"])
+            room   = db.get(Room,   state["recommended_room_id"])
             sessions[session_id] = fresh_state()
             sessions[session_id]["patient_name"] = name
             return {
@@ -184,7 +164,7 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
         name = extracted["patient_name"] or state.get("patient_name")
         if not name:
             return {"reply": "Which patient? Please provide their full name."}
-        patient = db.query(__import__("models").Patient).filter_by(name=name).first()
+        patient = db.query(Patient).filter_by(name=name).first()
         if not patient:
             return {"reply": f"No record found for '{name}'. Have they been registered?"}
         appts = scheduler.get_patient_appointments(db, patient.id)
@@ -258,9 +238,6 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
 
 sessions: dict[str, dict] = {}
 
-# ---------------------------------------------------------------------------
-# Slots endpoint
-# ---------------------------------------------------------------------------
 
 @app.get("/slots", response_model=list[SlotOption])
 def available_slots(procedure: str, date: str, db: Session = Depends(get_db)):
@@ -302,10 +279,6 @@ def available_slots(procedure: str, date: str, db: Session = Depends(get_db)):
     options.sort(key=lambda s: s.idle_time_score)
     return options
 
-
-# ---------------------------------------------------------------------------
-# Admin endpoints
-# ---------------------------------------------------------------------------
 
 @app.get("/doctors", response_model=list[DoctorRead])
 def list_doctors(db: Session = Depends(get_db)):

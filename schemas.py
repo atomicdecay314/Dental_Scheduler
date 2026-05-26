@@ -11,8 +11,6 @@ class DoctorBase(BaseModel):
 
 class DoctorCreate(DoctorBase):
     procedures: list[str]
-    # e.g. ["cleaning", "filling"] — passed on creation to populate
-    # the doctor_procedures association table
 
 class DoctorRead(DoctorBase):
     id: int
@@ -99,5 +97,5 @@ class SlotOption(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ChatRequest(BaseModel):
-    session_id: str   # identifies the conversation; use any unique string per user
-    message: str      # the latest message from the receptionist
+    session_id: str
+    message: str

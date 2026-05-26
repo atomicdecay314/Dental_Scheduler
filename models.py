@@ -24,7 +24,6 @@ class Doctor(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
-    # e.g. "Dr. Smith" — displayed to patients and in confirmations
 
     appointments = relationship("Appointment", back_populates="doctor")
 
@@ -34,7 +33,6 @@ class Room(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
-    # e.g. "Room A", "Surgical Suite 1"
 
     appointments = relationship("Appointment", back_populates="room")
 
@@ -58,7 +56,6 @@ class Appointment(Base):
     doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=False)
     room_id = Column(Integer, ForeignKey("rooms.id"), nullable=False)
     procedure = Column(String, nullable=False)
-    # The specific procedure being performed (e.g. "cleaning", "extraction")
     start_time = Column(DateTime, nullable=False)
     end_time = Column(DateTime, nullable=False)
 
@@ -66,9 +63,7 @@ class Appointment(Base):
     doctor = relationship("Doctor", back_populates="appointments")
     room = relationship("Room", back_populates="appointments")
 
-    # Prevent double-booking: a doctor or room cannot have two overlapping appointments
-    # at the same start_time. For full overlap detection, the scheduler layer handles
-    # range checks; these constraints catch exact-time duplicates at the DB level.
+    # DB-level guard against exact-time double-booking
     __table_args__ = (
         UniqueConstraint("doctor_id", "start_time", name="uq_doctor_slot"),
         UniqueConstraint("room_id", "start_time", name="uq_room_slot"),

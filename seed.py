@@ -30,9 +30,6 @@ def seed():
             {"doctor_id": doctors[2].id, "procedure": "retainer_fitting"},
         ])
 
-        # --- Rooms ---
-        # Each room is seeded with a name; its equipment capabilities follow the
-        # same association-table pattern as doctors.
         rooms = [
             Room(name="Room 1"),          # id=1 — general purpose
             Room(name="Room 2"),          # id=2 — surgical
@@ -51,8 +48,6 @@ def seed():
             {"room_id": rooms[2].id, "procedure": "retainer_fitting"},
         ])
 
-        # --- Patients ---
-        # A small set of sample patients for testing the chatbot flow.
         patients = [
             Patient(name="Dhruv Sawant",    phone="8562202171", email="dhryv@example.com"),
             Patient(name="Ekansh Shukla",  phone="932327575", email="ekansh@example.com"),
