@@ -21,6 +21,51 @@ from schemas import (
 
 Base.metadata.create_all(bind=engine)
 
+# ---------------------------------------------------------------------------
+# Incremental migrations — run at startup to patch existing DBs on Render
+# ---------------------------------------------------------------------------
+
+def _migrate():
+    """Add any missing data that wasn't present when the DB was first seeded."""
+    from models import doctor_procedures, room_procedures
+    db = SessionLocal()
+    try:
+        rhea = db.query(Doctor).filter(Doctor.name == "Dr. Rhea Singh").first()
+        room2 = db.query(Room).filter(Room.name == "Room 2").first()
+        if not rhea or not room2:
+            return
+
+        existing_dp = db.execute(
+            doctor_procedures.select().where(
+                doctor_procedures.c.doctor_id == rhea.id,
+                doctor_procedures.c.procedure == "root_canal",
+            )
+        ).fetchone()
+        if not existing_dp:
+            db.execute(doctor_procedures.insert(), [{"doctor_id": rhea.id, "procedure": "root_canal"}])
+
+        existing_rp = db.execute(
+            room_procedures.select().where(
+                room_procedures.c.room_id == room2.id,
+                room_procedures.c.procedure == "root_canal",
+            )
+        ).fetchone()
+        if not existing_rp:
+            db.execute(room_procedures.insert(), [{"room_id": room2.id, "procedure": "root_canal"}])
+
+        existing_cfg = db.query(ProcedureConfig).filter_by(procedure="root_canal", doctor_id=None).first()
+        if not existing_cfg:
+            db.add(ProcedureConfig(doctor_id=None, procedure="root_canal", duration_minutes=90, buffer_pct=10.0))
+
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
+
+
+_migrate()
+
 app = FastAPI(title="Dental Clinic Chatbot Scheduler")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -277,7 +322,7 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
         name       = extracted.get("patient_name") or state.get("patient_name")
 
         if not procedure:
-            return {"reply": "What procedure does the patient need? (e.g. cleaning, filling, extraction, xray, implant, braces consultation, retainer fitting)"}
+            return {"reply": "What procedure does the patient need? (e.g. cleaning, filling, extraction, xray, implant, braces consultation, retainer fitting, root canal)"}
         state["procedure"] = procedure
 
         # Resolve duration once procedure is confirmed
