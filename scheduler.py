@@ -1,8 +1,10 @@
-from datetime import datetime
+import math
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
-from models import Doctor, Room, Patient, Appointment, doctor_procedures, room_procedures
+from models import Doctor, Room, Patient, Appointment, ProcedureConfig, doctor_procedures, room_procedures
 
 
 # ---------------------------------------------------------------------------
@@ -29,6 +31,34 @@ def get_rooms_for_procedure(db: Session, procedure: str) -> list[Room]:
     return db.query(Room).filter(Room.id.in_(equipped_ids)).all()
 
 
+def get_duration(db: Session, procedure: str, doctor_id: int | None) -> tuple[int, float]:
+    """
+    Return (duration_minutes, buffer_pct) for a procedure.
+    Checks doctor-specific config first, then global fallback (doctor_id=NULL).
+    Raises ValueError if no config exists for the procedure.
+    """
+    if doctor_id is not None:
+        row = db.query(ProcedureConfig).filter(
+            ProcedureConfig.procedure == procedure,
+            ProcedureConfig.doctor_id == doctor_id,
+        ).first()
+        if row:
+            return row.duration_minutes, row.buffer_pct
+
+    row = db.query(ProcedureConfig).filter(
+        ProcedureConfig.procedure == procedure,
+        ProcedureConfig.doctor_id.is_(None),
+    ).first()
+    if row:
+        return row.duration_minutes, row.buffer_pct
+
+    raise ValueError(f"No procedure config for {procedure}")
+
+
+def get_buffer_minutes(duration_minutes: int, buffer_pct: float) -> int:
+    return math.ceil(duration_minutes * buffer_pct / 100)
+
+
 def get_or_create_patient(db: Session, name: str, phone: str | None = None, email: str | None = None) -> Patient:
     """Return an existing patient matched by name, or create a new one."""
     patient = db.query(Patient).filter(Patient.name == name).first()
@@ -43,22 +73,26 @@ def get_or_create_patient(db: Session, name: str, phone: str | None = None, emai
 # Availability check — core double-booking logic
 # ---------------------------------------------------------------------------
 
-def is_doctor_available(db: Session, doctor_id: int, start: datetime, end: datetime) -> bool:
-    """True if the doctor has no appointment overlapping the requested window."""
+def is_doctor_available(db: Session, doctor_id: int, start: datetime, end: datetime, buffer_minutes: int = 0) -> bool:
+    """True if the doctor has no appointment overlapping the requested window (respecting buffer)."""
+    effective_start = start - timedelta(minutes=buffer_minutes)
     conflict = db.query(Appointment).filter(
         Appointment.doctor_id == doctor_id,
-        Appointment.start_time < end,    # existing appt starts before new one ends
-        Appointment.end_time > start,    # existing appt ends after new one starts
+        Appointment.status != "cancelled",
+        Appointment.start_time < end,
+        Appointment.end_time > effective_start,
     ).first()
     return conflict is None
 
 
-def is_room_available(db: Session, room_id: int, start: datetime, end: datetime) -> bool:
-    """True if the room has no appointment overlapping the requested window."""
+def is_room_available(db: Session, room_id: int, start: datetime, end: datetime, buffer_minutes: int = 0) -> bool:
+    """True if the room has no appointment overlapping the requested window (respecting buffer)."""
+    effective_start = start - timedelta(minutes=buffer_minutes)
     conflict = db.query(Appointment).filter(
         Appointment.room_id == room_id,
+        Appointment.status != "cancelled",
         Appointment.start_time < end,
-        Appointment.end_time > start,
+        Appointment.end_time > effective_start,
     ).first()
     return conflict is None
 
@@ -106,6 +140,7 @@ def find_best_slot(
     procedure: str,
     start: datetime,
     end: datetime,
+    buffer_minutes: int = 0,
 ) -> tuple[Doctor, Room] | None:
     """
     Return the available (doctor, room) pair that minimises idle time around
@@ -118,10 +153,10 @@ def find_best_slot(
     best_score = float("inf")
 
     for doctor in doctors:
-        if not is_doctor_available(db, doctor.id, start, end):
+        if not is_doctor_available(db, doctor.id, start, end, buffer_minutes):
             continue
         for room in rooms:
-            if not is_room_available(db, room.id, start, end):
+            if not is_room_available(db, room.id, start, end, buffer_minutes):
                 continue
             score = score_idle_time(db, doctor.id, room.id, start, end)
             if score < best_score:
@@ -135,37 +170,54 @@ def find_next_available_slot(
     db: Session,
     procedure: str,
     from_time: datetime,
-    duration_minutes: int = 60,
+    duration_minutes: int,
+    buffer_minutes: int = 0,
     clinic_start: int = 9,
     clinic_end: int = 17,
     max_days: int = 7,
 ) -> tuple[Doctor, Room, datetime] | None:
     """
-    Scan forward from from_time (in hourly steps, within clinic hours) to find
-    the next available (doctor, room, start) for the procedure.
+    Scan forward from from_time to find the next available (doctor, room, start).
+    Uses min(duration, 30)-minute steps plus appointment end-times as candidate
+    starts so gaps between back-to-back appointments are never missed.
     Looks up to max_days ahead. Returns None if nothing found.
     """
-    slot = from_time.replace(minute=0, second=0, microsecond=0)
-    # Start from the next hour if the requested time is already taken
-    slot += timedelta(hours=1)
-
     deadline = from_time + timedelta(days=max_days)
+    step = timedelta(minutes=min(duration_minutes, 30))
 
-    while slot < deadline:
-        # Skip outside clinic hours
-        if slot.hour < clinic_start or slot.hour >= clinic_end:
-            if slot.hour >= clinic_end:
-                slot = slot.replace(hour=clinic_start) + timedelta(days=1)
-            else:
-                slot = slot.replace(hour=clinic_start)
+    # Collect scan-based candidates starting from next step after from_time
+    base = from_time.replace(second=0, microsecond=0)
+    candidates: set[datetime] = set()
+    t = base + step
+    while t < deadline:
+        if clinic_start <= t.hour < clinic_end:
+            candidates.add(t)
+        t += step
+
+    # Add appointment end-time + buffer candidates for relevant doctors
+    doctor_ids = [d.id for d in get_doctors_for_procedure(db, procedure)]
+    if doctor_ids:
+        existing = db.query(Appointment).filter(
+            Appointment.doctor_id.in_(doctor_ids),
+            Appointment.status != "cancelled",
+            Appointment.end_time >= from_time,
+            Appointment.end_time <= deadline,
+        ).all()
+        for appt in existing:
+            candidate = appt.end_time + timedelta(minutes=buffer_minutes)
+            if clinic_start <= candidate.hour < clinic_end:
+                candidates.add(candidate)
+
+    for slot_time in sorted(candidates):
+        if slot_time <= from_time:
             continue
-
-        end = slot + timedelta(minutes=duration_minutes)
-        result = find_best_slot(db, procedure, slot, end)
+        slot_end = slot_time + timedelta(minutes=duration_minutes)
+        # Don't allow slots that run past clinic close
+        if slot_end > slot_time.replace(hour=clinic_end, minute=0, second=0, microsecond=0):
+            continue
+        result = find_best_slot(db, procedure, slot_time, slot_end, buffer_minutes)
         if result:
-            return result[0], result[1], slot
-
-        slot += timedelta(hours=1)
+            return result[0], result[1], slot_time
 
     return None
 
@@ -199,9 +251,14 @@ def book_appointment(
         procedure=procedure,
         start_time=start,
         end_time=end,
+        status="scheduled",
     )
     db.add(appointment)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise ValueError(f"Slot at {start} is already booked (unique constraint).")
     db.refresh(appointment)
     return appointment
 

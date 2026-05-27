@@ -1,5 +1,5 @@
 from database import Base, engine, SessionLocal
-from models import Doctor, Room, Patient, doctor_procedures, room_procedures
+from models import Doctor, Room, Patient, ProcedureConfig, doctor_procedures, room_procedures
 
 Base.metadata.create_all(bind=engine)
 
@@ -47,6 +47,21 @@ def seed():
             {"room_id": rooms[2].id, "procedure": "braces_consultation"},
             {"room_id": rooms[2].id, "procedure": "retainer_fitting"},
         ])
+
+        # Global procedure duration fallbacks (doctor_id=None)
+        procedure_configs = [
+            ProcedureConfig(doctor_id=None, procedure="cleaning",             duration_minutes=30,  buffer_pct=10.0),
+            ProcedureConfig(doctor_id=None, procedure="filling",              duration_minutes=45,  buffer_pct=10.0),
+            ProcedureConfig(doctor_id=None, procedure="xray",                 duration_minutes=20,  buffer_pct=10.0),
+            ProcedureConfig(doctor_id=None, procedure="extraction",           duration_minutes=60,  buffer_pct=10.0),
+            ProcedureConfig(doctor_id=None, procedure="implant",              duration_minutes=90,  buffer_pct=10.0),
+            ProcedureConfig(doctor_id=None, procedure="braces_consultation",  duration_minutes=45,  buffer_pct=10.0),
+            ProcedureConfig(doctor_id=None, procedure="retainer_fitting",     duration_minutes=30,  buffer_pct=10.0),
+            # Per-doctor overrides
+            ProcedureConfig(doctor_id=doctors[0].id, procedure="cleaning",   duration_minutes=25,  buffer_pct=10.0),  # Dr. Palash Mehta faster
+            ProcedureConfig(doctor_id=doctors[1].id, procedure="extraction",  duration_minutes=75,  buffer_pct=10.0),  # Dr. Varun Kumar slower
+        ]
+        db.add_all(procedure_configs)
 
         patients = [
             Patient(name="Dhruv Sawant",    phone="8562202171", email="dhryv@example.com"),

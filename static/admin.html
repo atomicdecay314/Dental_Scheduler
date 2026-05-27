@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dental Scheduler — Admin</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet" />
+  <style>
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; vertical-align: middle; }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen font-sans text-sm text-gray-800">
+
+  <!-- Toast notification -->
+  <div id="toast" class="fixed bottom-5 right-5 z-50 hidden px-4 py-3 rounded-lg shadow-lg text-sm text-white max-w-sm"></div>
+
+  <!-- Header -->
+  <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-3 shadow-sm">
+    <span class="material-symbols-outlined text-blue-600">admin_panel_settings</span>
+    <h1 class="text-base font-semibold text-gray-700">Dental Scheduler Admin</h1>
+    <span class="ml-auto text-xs text-gray-400" id="admin-key-display"></span>
+  </header>
+
+  <!-- Tabs -->
+  <div class="px-6 pt-4 flex gap-2">
+    <button id="tab-procedures" onclick="switchTab('procedures')"
+      class="px-4 py-2 rounded-t-lg font-medium border-b-2 border-blue-500 text-blue-600 bg-white">
+      <span class="material-symbols-outlined text-base">schedule</span> Procedures
+    </button>
+    <button id="tab-waitlist" onclick="switchTab('waitlist')"
+      class="px-4 py-2 rounded-t-lg font-medium border-b-2 border-transparent text-gray-500 bg-gray-200 hover:bg-white">
+      <span class="material-symbols-outlined text-base">queue</span> Waitlist
+    </button>
+  </div>
+
+  <main class="px-6 pb-10">
+
+    <!-- Procedures Tab -->
+    <section id="panel-procedures" class="bg-white rounded-b-lg rounded-tr-lg shadow p-5">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="font-semibold text-gray-600">Procedure Configurations</h2>
+        <button onclick="loadProcedures()" class="text-xs text-blue-500 hover:underline flex items-center gap-1">
+          <span class="material-symbols-outlined text-sm">refresh</span> Refresh
+        </button>
+      </div>
+
+      <div class="overflow-x-auto mb-6">
+        <table class="w-full text-left border-collapse">
+          <thead>
+            <tr class="bg-gray-50 text-xs uppercase text-gray-500">
+              <th class="px-3 py-2 border-b">ID</th>
+              <th class="px-3 py-2 border-b">Doctor</th>
+              <th class="px-3 py-2 border-b">Procedure</th>
+              <th class="px-3 py-2 border-b">Duration (min)</th>
+              <th class="px-3 py-2 border-b">Buffer %</th>
+              <th class="px-3 py-2 border-b"></th>
+            </tr>
+          </thead>
+          <tbody id="proc-table-body">
+            <tr><td colspan="6" class="px-3 py-4 text-gray-400 text-center">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Add procedure form -->
+      <h3 class="font-medium text-gray-600 mb-3">Add New Configuration</h3>
+      <form onsubmit="createProcedure(event)" class="grid grid-cols-2 gap-3 max-w-lg">
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Doctor (leave blank for global)</label>
+          <select id="form-doctor-id" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="">— Global fallback —</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Procedure</label>
+          <select id="form-procedure" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="cleaning">cleaning</option>
+            <option value="filling">filling</option>
+            <option value="xray">xray</option>
+            <option value="extraction">extraction</option>
+            <option value="implant">implant</option>
+            <option value="braces_consultation">braces_consultation</option>
+            <option value="retainer_fitting">retainer_fitting</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Duration (minutes)</label>
+          <input id="form-duration" type="number" min="5" max="240" value="30"
+            class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm" required />
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Buffer %</label>
+          <input id="form-buffer" type="number" min="0" max="100" step="0.5" value="10"
+            class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm" required />
+        </div>
+        <div class="col-span-2">
+          <button type="submit"
+            class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm flex items-center gap-1">
+            <span class="material-symbols-outlined text-base">add</span> Add Configuration
+          </button>
+        </div>
+      </form>
+      <p id="proc-msg" class="mt-2 text-xs text-green-600 hidden"></p>
+    </section>
+
+    <!-- Waitlist Tab -->
+    <section id="panel-waitlist" class="bg-white rounded-b-lg rounded-tr-lg shadow p-5 hidden">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="font-semibold text-gray-600">Pending Waitlist Entries</h2>
+        <button onclick="loadWaitlist()" class="text-xs text-blue-500 hover:underline flex items-center gap-1">
+          <span class="material-symbols-outlined text-sm">refresh</span> Refresh
+        </button>
+      </div>
+
+      <div id="waitlist-groups">
+        <p class="text-gray-400 text-center py-4">Loading…</p>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    // -----------------------------------------------------------------------
+    // Auth
+    // -----------------------------------------------------------------------
+    let adminKey = localStorage.getItem('admin_key');
+    if (!adminKey) {
+      adminKey = prompt('Enter admin key:') || '';
+      if (adminKey) localStorage.setItem('admin_key', adminKey);
+    }
+    document.getElementById('admin-key-display').textContent = adminKey ? `key: ${adminKey.slice(0, 4)}…` : 'no key set';
+
+    const qs = (extra = '') => `?admin_key=${encodeURIComponent(adminKey)}${extra}`;
+
+    // -----------------------------------------------------------------------
+    // Tab switching
+    // -----------------------------------------------------------------------
+    function switchTab(tab) {
+      const tabs = ['procedures', 'waitlist'];
+      tabs.forEach(t => {
+        document.getElementById(`tab-${t}`).className =
+          t === tab
+            ? 'px-4 py-2 rounded-t-lg font-medium border-b-2 border-blue-500 text-blue-600 bg-white'
+            : 'px-4 py-2 rounded-t-lg font-medium border-b-2 border-transparent text-gray-500 bg-gray-200 hover:bg-white';
+        document.getElementById(`panel-${t}`).classList.toggle('hidden', t !== tab);
+      });
+      if (tab === 'procedures') loadProcedures();
+      if (tab === 'waitlist') loadWaitlist();
+    }
+
+    // -----------------------------------------------------------------------
+    // Procedures tab
+    // -----------------------------------------------------------------------
+    let doctors = [];
+
+    async function loadDoctors() {
+      const res = await fetch('/doctors');
+      doctors = await res.json();
+      const sel = document.getElementById('form-doctor-id');
+      sel.innerHTML = '<option value="">— Global fallback —</option>';
+      doctors.forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d.id;
+        opt.textContent = d.name;
+        sel.appendChild(opt);
+      });
+    }
+
+    function doctorName(id) {
+      if (!id) return '<span class="text-gray-400 italic">Global</span>';
+      const d = doctors.find(d => d.id === id);
+      return d ? d.name : `Doctor #${id}`;
+    }
+
+    async function loadProcedures() {
+      const res = await fetch(`/admin/procedures${qs()}`);
+      if (!res.ok) { alert('Unauthorised — check your admin key.'); return; }
+      const rows = await res.json();
+      const tbody = document.getElementById('proc-table-body');
+      if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="px-3 py-4 text-gray-400 text-center">No configurations found.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = rows.map(r => `
+        <tr class="border-b hover:bg-gray-50">
+          <td class="px-3 py-2 text-gray-400">${r.id}</td>
+          <td class="px-3 py-2">${doctorName(r.doctor_id)}</td>
+          <td class="px-3 py-2 font-mono text-xs">${r.procedure}</td>
+          <td class="px-3 py-2">${r.duration_minutes}</td>
+          <td class="px-3 py-2">${r.buffer_pct}%</td>
+          <td class="px-3 py-2">
+            <button onclick="deleteProcedure(${r.id})"
+              class="text-red-500 hover:text-red-700 flex items-center gap-0.5 text-xs">
+              <span class="material-symbols-outlined text-base">delete</span> Remove
+            </button>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    async function deleteProcedure(id) {
+      if (!confirm('Delete this configuration?')) return;
+      const res = await fetch(`/admin/procedures/${id}${qs()}`, { method: 'DELETE' });
+      if (res.ok) loadProcedures();
+      else alert('Failed to delete.');
+    }
+
+    async function createProcedure(e) {
+      e.preventDefault();
+      const body = {
+        doctor_id: document.getElementById('form-doctor-id').value || null,
+        procedure: document.getElementById('form-procedure').value,
+        duration_minutes: parseInt(document.getElementById('form-duration').value),
+        buffer_pct: parseFloat(document.getElementById('form-buffer').value),
+      };
+      if (body.doctor_id) body.doctor_id = parseInt(body.doctor_id);
+      const res = await fetch(`/admin/procedures${qs()}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const msg = document.getElementById('proc-msg');
+      if (res.ok) {
+        msg.textContent = 'Configuration added.';
+        msg.classList.remove('hidden', 'text-red-600');
+        msg.classList.add('text-green-600');
+        loadProcedures();
+      } else {
+        const err = await res.json();
+        msg.textContent = `Error: ${JSON.stringify(err.detail)}`;
+        msg.classList.remove('hidden', 'text-green-600');
+        msg.classList.add('text-red-600');
+      }
+      setTimeout(() => msg.classList.add('hidden'), 3000);
+    }
+
+    // -----------------------------------------------------------------------
+    // Waitlist tab
+    // -----------------------------------------------------------------------
+    async function loadWaitlist() {
+      const res = await fetch(`/admin/waitlist${qs()}`);
+      if (!res.ok) { alert('Unauthorised — check your admin key.'); return; }
+      const entries = await res.json();
+      const container = document.getElementById('waitlist-groups');
+      if (!entries.length) {
+        container.innerHTML = '<p class="text-gray-400 text-center py-4">No pending waitlist entries.</p>';
+        return;
+      }
+
+      // Group by procedure + requested_start
+      const groups = {};
+      entries.forEach(e => {
+        const key = `${e.procedure}|${e.requested_start}`;
+        if (!groups[key]) groups[key] = { procedure: e.procedure, start: e.requested_start, end: e.requested_end, entries: [] };
+        groups[key].entries.push(e);
+      });
+
+      container.innerHTML = Object.values(groups).map(g => `
+        <div class="mb-6 border border-gray-200 rounded-lg overflow-hidden">
+          <div class="bg-gray-50 px-4 py-2 flex items-center justify-between">
+            <span class="font-medium text-gray-700">
+              <span class="font-mono text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">${g.procedure}</span>
+              &nbsp;${fmtDt(g.start)}
+            </span>
+            <button onclick="triggerSlot('${g.procedure}','${g.start}','${g.end}')"
+              class="text-xs bg-green-600 text-white px-2.5 py-1 rounded hover:bg-green-700 flex items-center gap-1">
+              <span class="material-symbols-outlined text-sm">bolt</span> Trigger reassignment
+            </button>
+          </div>
+          <table class="w-full text-left">
+            <thead>
+              <tr class="text-xs uppercase text-gray-500 bg-gray-50">
+                <th class="px-3 py-2 border-b">Priority</th>
+                <th class="px-3 py-2 border-b">Patient</th>
+                <th class="px-3 py-2 border-b">Preferred Doctor</th>
+                <th class="px-3 py-2 border-b">Added</th>
+                <th class="px-3 py-2 border-b"></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${g.entries.map(e => `
+                <tr class="border-b hover:bg-gray-50">
+                  <td class="px-3 py-2 font-medium">#${e.priority}</td>
+                  <td class="px-3 py-2">${e.patient_name}</td>
+                  <td class="px-3 py-2">${e.doctor_id ? doctorName(e.doctor_id) : '<span class="text-gray-400">Any</span>'}</td>
+                  <td class="px-3 py-2 text-gray-400 text-xs">${fmtDt(e.created_at)}</td>
+                  <td class="px-3 py-2 flex gap-2">
+                    <button onclick="promoteEntry(${e.id})"
+                      class="text-blue-500 hover:text-blue-700 flex items-center gap-0.5 text-xs">
+                      <span class="material-symbols-outlined text-base">arrow_upward</span> Promote
+                    </button>
+                    <button onclick="removeEntry(${e.id})"
+                      class="text-red-500 hover:text-red-700 flex items-center gap-0.5 text-xs">
+                      <span class="material-symbols-outlined text-base">delete</span> Remove
+                    </button>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `).join('');
+    }
+
+    async function promoteEntry(id) {
+      const res = await fetch(`/admin/waitlist/${id}/promote${qs()}`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.message) showToast(data.message);
+        loadWaitlist();
+      } else {
+        alert('Failed to promote.');
+      }
+    }
+
+    async function removeEntry(id) {
+      if (!confirm('Remove this waitlist entry?')) return;
+      const res = await fetch(`/admin/waitlist/${id}${qs()}`, { method: 'DELETE' });
+      if (res.ok) loadWaitlist();
+      else alert('Failed to remove.');
+    }
+
+    async function triggerSlot(procedure, start, end) {
+      if (!confirm(`Attempt to book waitlisted patients for ${procedure} at ${fmtDt(start)}?\n\nThis only succeeds if the slot is currently free.`)) return;
+      const res = await fetch(`/admin/waitlist/trigger${qs()}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ procedure, freed_start: start, freed_end: end }),
+      });
+      const data = await res.json();
+      if (data.booked_count > 0) {
+        showToast(`✓ Booked ${data.booked_count} patient(s) — appointment IDs: ${data.appointment_ids.join(', ')}`);
+      } else {
+        showToast('No bookings made — the slot is still occupied or no waitlist entries matched.', true);
+      }
+      loadWaitlist();
+    }
+
+    function showToast(msg, isWarning = false) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.className = `fixed bottom-5 right-5 z-50 px-4 py-3 rounded-lg shadow-lg text-sm text-white max-w-sm ${isWarning ? 'bg-amber-600' : 'bg-green-700'}`;
+      t.classList.remove('hidden');
+      setTimeout(() => t.classList.add('hidden'), 4000);
+    }
+
+    function fmtDt(iso) {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      return d.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+
+    // -----------------------------------------------------------------------
+    // Init
+    // -----------------------------------------------------------------------
+    loadDoctors().then(() => loadProcedures());
+  </script>
+</body>
+</html>

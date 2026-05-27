@@ -22,7 +22,7 @@ The interactive API docs are available at `http://127.0.0.1:8000/docs` once the 
 
 ## Environment
 
-Requires a `GEMINI_API_KEY` in `.env`. The server will fail to start without it.
+Requires a `GEMINI_API_KEY` and `ADMIN_KEY` in `.env`. The server will fail to start without `GEMINI_API_KEY`. `ADMIN_KEY` is used to protect all `/admin/*` routes — pass it as `?admin_key=` on every request.
 
 ## Architecture
 
@@ -34,7 +34,9 @@ FastAPI + SQLAlchemy (SQLite) + Gemini API chatbot for booking dental appointmen
 POST /chat  →  main.py (session state + Gemini extraction)
                     │
                     ├── scheduler.py  (availability checks + booking logic)
-                    │        └── models.py  (Doctor, Room, Patient, Appointment)
+                    │        └── models.py  (Doctor, Room, Patient, Appointment,
+                    │                        ProcedureConfig, Waitlist)
+                    ├── waitlist.py   (add_to_waitlist, trigger_waitlist)
                     └── sessions dict  (in-memory per session_id — lost on restart)
 ```
 
@@ -44,14 +46,19 @@ POST /chat  →  main.py (session state + Gemini extraction)
 - Gemini (`gemini-2.5-flash-lite`) extracts structured JSON (intent, procedure, datetime, patient_name) from every message. The extraction prompt is in `EXTRACTION_PROMPT` and returns one of: `book | list | cancel | greet | unknown`.
 - Procedure-to-doctor and procedure-to-room mappings use `doctor_procedures` and `room_procedures` association tables (not columns). The procedure string is the join key — it must match exactly across seed data and `VALID_PROCEDURES` in `main.py`.
 - Double-booking is two-layered: range overlap queries in `scheduler.py` (`start_time < end AND end_time > start`) plus DB `UniqueConstraint` on exact `start_time` as a fallback.
-- `find_best_slot` scores (doctor, room) pairs by idle-time minimisation — prefers slots that fill gaps around existing appointments. `find_next_available_slot` scans forward hourly up to 7 days when the requested slot is unavailable.
-- `AppointmentRead` in `schemas.py` returns fully nested patient/doctor/room objects — no second request needed.
+- `find_best_slot` scores (doctor, room) pairs by idle-time minimisation — prefers slots that fill gaps around existing appointments. `find_next_available_slot` scans forward (in `min(duration, 30)`-minute steps plus appointment end-time candidates) up to 7 days when the requested slot is unavailable.
+- `AppointmentRead` in `schemas.py` returns fully nested patient/doctor/room objects — no second request needed. `Appointment.status` is one of: `scheduled`, `cancelled`, `completed`, `no_show`.
 - The frontend (`static/index.html`) is a single-file Tailwind + Material Symbols UI with a collapsible chat panel and a live daily timetable. It calls `POST /chat`, `GET /appointments`, `GET /doctors`, and `DELETE /appointments`.
+- `static/admin.html` (served at `/admin`) is an admin panel with two tabs: **Procedures** (manage `ProcedureConfig` rows) and **Waitlist** (promote, remove, and trigger reassignment for pending entries). All admin routes require `?admin_key=` matching `ADMIN_KEY`.
+- **Duration lookup chain** (`scheduler.get_duration`): queries `ProcedureConfig` for matching `(procedure, doctor_id)` first → then `(procedure, doctor_id=NULL)` global fallback → raises `ValueError` if neither found.
+- **Buffer convention**: `buffer_minutes` is applied only during availability checks (`Appointment.end_time > start - buffer`). The `end_time` stored on a booked `Appointment` is always `start + duration` — no buffer included in the stored value.
 
 **Adding a new procedure:** add it to `seed.py` (doctor and room associations) and to `VALID_PROCEDURES` in `main.py`, then re-seed.
 
 **Chatbot booking flow** (multi-turn, collects one missing field per turn):
 1. Extract procedure → ask if missing
-2. Extract datetime → ask if missing
-3. Extract patient name → ask if missing
-4. `find_best_slot` → if taken, `find_next_available_slot` → confirm → `book_appointment`
+2. Resolve `duration_minutes` + `buffer_minutes` via `get_duration` → error if no config
+3. Extract datetime → ask if missing
+4. Extract patient name → ask if missing
+5. Check contact info — if patient has no phone AND no email, ask and await response
+6. `find_best_slot` → if taken, `find_next_available_slot` → confirm or 'waitlist' to join queue → `book_appointment`

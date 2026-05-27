@@ -67,6 +67,7 @@ class AppointmentCreate(BaseModel):
 class AppointmentRead(BaseModel):
     id: int
     procedure: str
+    status: str
     start_time: datetime
     end_time: datetime
     patient: PatientRead
@@ -88,6 +89,50 @@ class SlotOption(BaseModel):
     room: str
     room_id: int
     idle_time_score: float
+
+
+# ---------------------------------------------------------------------------
+# ProcedureConfig
+# ---------------------------------------------------------------------------
+
+class ProcedureConfigBase(BaseModel):
+    procedure: str
+    duration_minutes: int
+    buffer_pct: float = 10.0
+    doctor_id: int | None = None
+
+class ProcedureConfigCreate(ProcedureConfigBase):
+    pass
+
+class ProcedureConfigRead(ProcedureConfigBase):
+    id: int
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Waitlist
+# ---------------------------------------------------------------------------
+
+class WaitlistRead(BaseModel):
+    id: int
+    patient_id: int
+    patient_name: str
+    procedure: str
+    doctor_id: int | None
+    requested_start: datetime
+    requested_end: datetime
+    priority: int
+    notified: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class TriggerWaitlistRequest(BaseModel):
+    procedure: str
+    freed_start: datetime
+    freed_end: datetime
 
 
 # ---------------------------------------------------------------------------

@@ -199,9 +199,9 @@
 
     <!-- Grid -->
     <div class="flex-1 overflow-auto scrollbar-hide">
-      <table id="timetable" class="w-full border-collapse text-[13px]">
-        <tbody><tr><td class="p-10 text-center text-outline">Loading schedule…</td></tr></tbody>
-      </table>
+      <div id="timetable" class="text-[13px]">
+        <div class="p-10 text-center text-outline">Loading schedule…</div>
+      </div>
     </div>
   </section>
 </main>
@@ -338,63 +338,136 @@
   }
 
   function renderTimetable(doctors, appts) {
-    const today = dateStr(currentDate);
-    const dayAppts = appts.filter(a => dateStr(new Date(a.start_time)) === today);
+    const PX_PER_HOUR = 80;
+    const CLINIC_START_H = 9;
+    const CLINIC_END_H   = 17;
+    const TOTAL_HOURS    = CLINIC_END_H - CLINIC_START_H;
+    const TOTAL_PX       = TOTAL_HOURS * PX_PER_HOUR;
 
-    const lookup = {};
-    dayAppts.forEach(a => {
-      const h = new Date(a.start_time).getHours();
-      lookup[`${a.doctor.id}_${h}`] = a;
-    });
+    const today    = dateStr(currentDate);
+    const isToday  = dateStr(new Date()) === today;
+    const dayAppts = appts.filter(a => dateStr(new Date(a.start_time)) === today);
 
     if (!doctors.length) {
       document.getElementById('timetable').innerHTML =
-        '<tbody><tr><td class="p-10 text-center text-outline">No doctors found.</td></tr></tbody>';
+        '<div class="p-10 text-center text-outline">No doctors found.</div>';
       return;
     }
 
-    // Header row
-    let html = `<thead><tr>
-      <th class="w-20 p-3 border-b-2 border-r border-border-subtle bg-surface-container-low sticky top-0 z-10">
-        <span class="material-symbols-outlined text-outline text-[18px]">schedule</span>
-      </th>`;
-    doctors.forEach(d => {
-      html += `<th class="p-4 border-b-2 border-r border-border-subtle bg-surface-container-low sticky top-0 z-10 text-center">
-        <p class="text-label-md font-bold text-on-surface">${d.name}</p>
-        <p class="text-[11px] text-outline uppercase tracking-wider mt-0.5">Doctor</p>
-      </th>`;
-    });
-    html += '</tr></thead><tbody>';
+    function toTop(dt) {
+      return ((dt.getHours() - CLINIC_START_H) * 60 + dt.getMinutes()) / 60 * PX_PER_HOUR;
+    }
+    function fmtT(dt) {
+      return dt.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'});
+    }
 
-    // Hour rows
-    HOURS.forEach(h => {
+    // Grid lines shared across all columns
+    let gridLines = '';
+    for (let i = 0; i <= TOTAL_HOURS; i++) {
+      gridLines += `<div class="absolute left-0 right-0 border-t border-border-subtle pointer-events-none" style="top:${i * PX_PER_HOUR}px"></div>`;
+    }
+    for (let i = 0; i < TOTAL_HOURS; i++) {
+      gridLines += `<div class="absolute left-0 right-0 border-t border-dashed border-gray-100 pointer-events-none" style="top:${i * PX_PER_HOUR + PX_PER_HOUR / 2}px"></div>`;
+    }
+
+    // "Now" line — only shown when viewing today
+    let nowLine = '';
+    if (isToday) {
+      const now = new Date();
+      const top = toTop(now);
+      if (top >= 0 && top <= TOTAL_PX) {
+        nowLine = `<div class="absolute left-0 right-0 z-20 pointer-events-none" style="top:${top}px">
+          <div class="border-t-2 border-red-400 relative">
+            <div class="absolute -left-1 -top-1.5 w-3 h-3 rounded-full bg-red-400"></div>
+          </div>
+        </div>`;
+      }
+    }
+
+    // Time label column — labels sit 2px below the grid line so the first (9 AM) is never clipped
+    let timeLabels = '';
+    for (let i = 0; i < TOTAL_HOURS; i++) {
+      const h = CLINIC_START_H + i;
       const label = h < 12 ? `${h}:00 AM` : h === 12 ? '12:00 PM' : `${h-12}:00 PM`;
-      const isNow = new Date().getHours() === h && dateStr(new Date()) === today;
-      html += `<tr class="${isNow ? 'bg-clinical-blue-tint/40' : ''}">
-        <td class="border-b border-r border-border-subtle bg-surface-muted text-right pr-3 py-2 text-label-sm text-outline font-semibold align-middle w-20">
-          ${label}
-        </td>`;
+      timeLabels += `<div class="absolute right-3 text-[11px] text-outline font-semibold whitespace-nowrap select-none"
+                          style="top:${i * PX_PER_HOUR + 2}px">${label}</div>`;
+    }
+    // 5 PM end marker — right-aligned, above the last line
+    timeLabels += `<div class="absolute right-3 text-[11px] text-outline font-semibold whitespace-nowrap select-none"
+                        style="top:${TOTAL_HOURS * PX_PER_HOUR - 14}px">5:00 PM</div>`;
 
-      doctors.forEach(d => {
-        const a = lookup[`${d.id}_${h}`];
-        if (a) {
-          html += `<td class="border-b border-r border-border-subtle p-1 h-24 align-top relative">
-            <div class="absolute inset-1 bg-clinical-blue-tint border-l-4 border-primary-container rounded-lg p-3 flex flex-col justify-center min-h-[88px]">
-              <h4 class="text-label-md font-bold text-on-primary-fixed-variant">${a.patient.name}</h4>
-              <p class="text-[12px] text-secondary mt-0.5 font-medium">${a.procedure.replace(/_/g,' ')}</p>
-              <span class="mt-1.5 inline-block px-2 py-0.5 bg-white/70 text-[10px] rounded text-primary font-bold uppercase">${a.room.name}</span>
-            </div>
-          </td>`;
+    // Doctor columns
+    let doctorCols = '';
+    doctors.forEach(doc => {
+      const docAppts = dayAppts.filter(a => a.doctor.id === doc.id);
+
+      let blocks = '';
+      docAppts.forEach(a => {
+        const start  = new Date(a.start_time);
+        const end    = new Date(a.end_time);
+        const top    = toTop(start);
+        const height = Math.max((end - start) / 3600000 * PX_PER_HOUR - 2, 20);
+        const cancelled = a.status === 'cancelled';
+
+        // Store full data in global lookup so onclick can retrieve it safely (avoids JSON-in-attribute quoting issues)
+        window._apptLookup = window._apptLookup || {};
+        window._apptLookup[a.id] = {
+          id:        a.id,
+          patient:   a.patient.name,
+          phone:     a.patient.phone  || '—',
+          email:     a.patient.email  || '—',
+          procedure: a.procedure.replace(/_/g,' '),
+          start:     fmtT(start),
+          end:       fmtT(end),
+          room:      a.room.name,
+          doctor:    a.doctor.name,
+          status:    a.status,
+        };
+
+        if (cancelled) {
+          blocks += `<div class="absolute inset-x-1 rounded-lg border-l-4 border-gray-300 bg-gray-50 px-2 py-1 opacity-50 overflow-hidden cursor-pointer"
+                          style="top:${top}px;height:${height}px"
+                          onclick="showApptPopup(event,${a.id})">
+            <p class="font-medium text-[11px] text-gray-400 truncate line-through">${a.patient.name}</p>
+            <p class="text-[10px] text-gray-400">${fmtT(start)} · cancelled</p>
+          </div>`;
         } else {
-          html += `<td class="border-b border-r border-border-subtle h-24 hover:bg-surface-container-low transition-colors cursor-default"></td>`;
+          const showProcedure = height >= 36;
+          const showMeta      = height >= 54;
+          blocks += `<div class="absolute inset-x-1 rounded-lg border-l-4 border-primary-container bg-clinical-blue-tint shadow-sm px-2 py-1.5 overflow-hidden cursor-pointer hover:brightness-95 transition-all"
+                          style="top:${top}px;height:${height}px"
+                          onclick="showApptPopup(event,${a.id})">
+            <p class="font-bold text-[12px] text-on-primary-fixed-variant truncate">${a.patient.name}</p>
+            ${showProcedure ? `<p class="text-[11px] text-secondary capitalize truncate">${a.procedure.replace(/_/g,' ')}</p>` : ''}
+            ${showMeta ? `<div class="flex items-center gap-1.5 mt-0.5 flex-wrap">
+              <span class="text-[10px] text-outline">${fmtT(start)}–${fmtT(end)}</span>
+              <span class="px-1.5 py-px bg-white/70 text-[9px] rounded text-primary font-bold uppercase">${a.room.name}</span>
+            </div>` : ''}
+          </div>`;
         }
       });
 
-      html += '</tr>';
+      doctorCols += `<div class="flex-1 min-w-[160px] border-l border-border-subtle flex flex-col">
+        <div class="px-4 py-3 border-b-2 border-border-subtle bg-surface-container-low text-center sticky top-0 z-10 flex-shrink-0">
+          <p class="text-label-md font-bold text-on-surface">${doc.name}</p>
+          <p class="text-[11px] text-outline uppercase tracking-wider mt-0.5">Doctor</p>
+        </div>
+        <div class="relative" style="height:${TOTAL_PX}px">
+          ${gridLines}${nowLine}${blocks}
+        </div>
+      </div>`;
     });
 
-    html += '</tbody>';
-    document.getElementById('timetable').innerHTML = html;
+    document.getElementById('timetable').innerHTML = `
+      <div class="flex w-full">
+        <div class="w-20 flex-shrink-0 border-r border-border-subtle flex flex-col">
+          <div class="flex items-center justify-center border-b-2 border-border-subtle bg-surface-container-low sticky top-0 z-10 flex-shrink-0" style="height:52px">
+            <span class="material-symbols-outlined text-outline text-[18px]">schedule</span>
+          </div>
+          <div class="relative bg-surface-muted" style="height:${TOTAL_PX}px">${timeLabels}</div>
+        </div>
+        <div class="flex flex-1">${doctorCols}</div>
+      </div>`;
   }
 
   // ── Clear all ─────────────────────────────────────────────
@@ -404,6 +477,112 @@
     await loadTimetable();
     addMessage('bot', 'All bookings have been cleared.');
   }
+
+  // ── Appointment detail popup ───────────────────────────────
+  function showApptPopup(event, apptId) {
+    event.stopPropagation();
+    const d = window._apptLookup[apptId];
+    if (!d) return;
+    const popup = document.getElementById('appt-popup');
+
+    const statusColor = d.status === 'cancelled'
+      ? 'bg-gray-100 text-gray-500'
+      : d.status === 'scheduled'
+        ? 'bg-blue-50 text-blue-700'
+        : 'bg-green-50 text-green-700';
+
+    popup.innerHTML = `
+      <div class="flex items-start justify-between mb-3">
+        <div>
+          <p class="font-bold text-[15px] text-on-surface">${d.patient}</p>
+          <span class="inline-block mt-1 px-2 py-0.5 rounded-full text-[11px] font-semibold capitalize ${statusColor}">${d.status}</span>
+        </div>
+        <button onclick="hideApptPopup()" class="text-outline hover:text-on-surface ml-3 mt-0.5">
+          <span class="material-symbols-outlined text-[18px]">close</span>
+        </button>
+      </div>
+      <div class="space-y-2 text-[13px]">
+        <div class="flex gap-2 items-start">
+          <span class="material-symbols-outlined text-outline text-[16px] mt-0.5">stethoscope</span>
+          <div><p class="text-outline text-[11px] uppercase tracking-wide font-semibold">Procedure</p>
+               <p class="text-on-surface capitalize font-medium">${d.procedure}</p></div>
+        </div>
+        <div class="flex gap-2 items-start">
+          <span class="material-symbols-outlined text-outline text-[16px] mt-0.5">schedule</span>
+          <div><p class="text-outline text-[11px] uppercase tracking-wide font-semibold">Time</p>
+               <p class="text-on-surface font-medium">${d.start} – ${d.end}</p></div>
+        </div>
+        <div class="flex gap-2 items-start">
+          <span class="material-symbols-outlined text-outline text-[16px] mt-0.5">person</span>
+          <div><p class="text-outline text-[11px] uppercase tracking-wide font-semibold">Doctor</p>
+               <p class="text-on-surface font-medium">${d.doctor}</p></div>
+        </div>
+        <div class="flex gap-2 items-start">
+          <span class="material-symbols-outlined text-outline text-[16px] mt-0.5">meeting_room</span>
+          <div><p class="text-outline text-[11px] uppercase tracking-wide font-semibold">Room</p>
+               <p class="text-on-surface font-medium">${d.room}</p></div>
+        </div>
+        ${d.phone !== '—' || d.email !== '—' ? `
+        <div class="border-t border-border-subtle pt-2 mt-2 flex gap-2 items-start">
+          <span class="material-symbols-outlined text-outline text-[16px] mt-0.5">contact_phone</span>
+          <div><p class="text-outline text-[11px] uppercase tracking-wide font-semibold">Contact</p>
+               ${d.phone !== '—' ? `<p class="text-on-surface">${d.phone}</p>` : ''}
+               ${d.email !== '—' ? `<p class="text-on-surface">${d.email}</p>` : ''}
+          </div>
+        </div>` : ''}
+      </div>
+      ${d.status !== 'cancelled' ? `
+      <div class="mt-4 pt-3 border-t border-border-subtle">
+        <button onclick="cancelAppt(${d.id})"
+          class="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 text-red-600 text-[13px] font-medium hover:bg-red-50 transition-colors">
+          <span class="material-symbols-outlined text-[16px]">event_busy</span>
+          Cancel booking
+        </button>
+      </div>` : ''}`;
+
+    // Position near click, keep within viewport
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const pw = 272, ph = 280;
+    let x = event.clientX + 12;
+    let y = event.clientY - 20;
+    if (x + pw > vw - 16) x = event.clientX - pw - 12;
+    if (y + ph > vh - 16) y = vh - ph - 16;
+    if (y < 8) y = 8;
+
+    popup.style.left = x + 'px';
+    popup.style.top  = y + 'px';
+    popup.classList.remove('hidden');
+  }
+
+  function hideApptPopup() {
+    document.getElementById('appt-popup').classList.add('hidden');
+  }
+
+  async function cancelAppt(id) {
+    if (!confirm('Cancel this appointment? This cannot be undone.')) return;
+    const res = await fetch(`/appointments/${id}/cancel`, { method: 'POST' });
+    if (res.ok) {
+      hideApptPopup();
+      await loadTimetable();
+    } else {
+      const err = await res.json();
+      alert('Failed to cancel: ' + (err.detail || 'unknown error'));
+    }
+  }
+
+  document.addEventListener('click', (e) => {
+    const popup = document.getElementById('appt-popup');
+    if (!popup.classList.contains('hidden') && !popup.contains(e.target)) {
+      hideApptPopup();
+    }
+  });
 </script>
+
+<!-- Appointment detail popup -->
+<div id="appt-popup"
+     class="hidden fixed z-[100] w-68 bg-white rounded-xl shadow-2xl border border-border-subtle p-4"
+     style="width:272px">
+</div>
+
 </body>
 </html>

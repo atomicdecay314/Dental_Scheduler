@@ -1,4 +1,6 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Table, UniqueConstraint
+from datetime import datetime as _dt
+from sqlalchemy import Column, Integer, String, DateTime, Float, Boolean, ForeignKey, Table, event
+from sqlalchemy.schema import DDL
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -63,8 +65,55 @@ class Appointment(Base):
     doctor = relationship("Doctor", back_populates="appointments")
     room = relationship("Room", back_populates="appointments")
 
-    # DB-level guard against exact-time double-booking
-    __table_args__ = (
-        UniqueConstraint("doctor_id", "start_time", name="uq_doctor_slot"),
-        UniqueConstraint("room_id", "start_time", name="uq_room_slot"),
-    )
+    status = Column(String, default="scheduled", nullable=False)
+
+    # No table-level unique constraints — see partial indexes below (status-aware)
+
+
+class ProcedureConfig(Base):
+    __tablename__ = "procedure_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=True)
+    procedure = Column(String, nullable=False)
+    duration_minutes = Column(Integer, nullable=False)
+    buffer_pct = Column(Float, default=10.0, nullable=False)
+
+    doctor = relationship("Doctor")
+
+
+class Waitlist(Base):
+    __tablename__ = "waitlist"
+
+    id = Column(Integer, primary_key=True, index=True)
+    patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False)
+    procedure = Column(String, nullable=False)
+    doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=True)
+    requested_start = Column(DateTime, nullable=False)
+    requested_end = Column(DateTime, nullable=False)
+    priority = Column(Integer, nullable=False)
+    notified = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=_dt.utcnow, nullable=False)
+
+    patient = relationship("Patient")
+    doctor = relationship("Doctor")
+
+
+# Partial unique indexes — only enforce uniqueness for non-cancelled appointments.
+# This lets a cancelled slot at start_time X be re-booked without constraint errors.
+event.listen(
+    Base.metadata,
+    "after_create",
+    DDL(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_doctor_slot_active "
+        "ON appointments (doctor_id, start_time) WHERE status != 'cancelled'"
+    ),
+)
+event.listen(
+    Base.metadata,
+    "after_create",
+    DDL(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_room_slot_active "
+        "ON appointments (room_id, start_time) WHERE status != 'cancelled'"
+    ),
+)
