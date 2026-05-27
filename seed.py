@@ -28,6 +28,7 @@ def seed():
             {"doctor_id": doctors[1].id, "procedure": "implant"},
             {"doctor_id": doctors[2].id, "procedure": "braces_consultation"},
             {"doctor_id": doctors[2].id, "procedure": "retainer_fitting"},
+            {"doctor_id": doctors[2].id, "procedure": "root_canal"},
         ])
 
         rooms = [
@@ -46,6 +47,7 @@ def seed():
             {"room_id": rooms[1].id, "procedure": "implant"},
             {"room_id": rooms[2].id, "procedure": "braces_consultation"},
             {"room_id": rooms[2].id, "procedure": "retainer_fitting"},
+            {"room_id": rooms[1].id, "procedure": "root_canal"},
         ])
 
         # Global procedure duration fallbacks (doctor_id=None)
@@ -57,6 +59,7 @@ def seed():
             ProcedureConfig(doctor_id=None, procedure="implant",              duration_minutes=90,  buffer_pct=10.0),
             ProcedureConfig(doctor_id=None, procedure="braces_consultation",  duration_minutes=45,  buffer_pct=10.0),
             ProcedureConfig(doctor_id=None, procedure="retainer_fitting",     duration_minutes=30,  buffer_pct=10.0),
+            ProcedureConfig(doctor_id=None, procedure="root_canal",           duration_minutes=90,  buffer_pct=10.0),
             # Per-doctor overrides
             ProcedureConfig(doctor_id=doctors[0].id, procedure="cleaning",   duration_minutes=25,  buffer_pct=10.0),  # Dr. Palash Mehta faster
             ProcedureConfig(doctor_id=doctors[1].id, procedure="extraction",  duration_minutes=75,  buffer_pct=10.0),  # Dr. Varun Kumar slower

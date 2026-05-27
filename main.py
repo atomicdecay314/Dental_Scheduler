@@ -37,7 +37,7 @@ CLINIC_END   = 17   # 5pm
 
 VALID_PROCEDURES = {
     "cleaning", "filling", "xray", "extraction",
-    "implant", "braces_consultation", "retainer_fitting",
+    "implant", "braces_consultation", "retainer_fitting", "root_canal",
 }
 
 VALID_INTENTS = {"book", "list", "cancel", "greet", "unknown"}
@@ -58,7 +58,7 @@ def require_admin(admin_key: str = ""):
 EXTRACTION_PROMPT = """Extract from this dental clinic message. Return JSON only, no markdown.
 Today: {today} ({weekday}).
 Rules: datetime must be "YYYY-MM-DDThh:mm:ss" (no Z/timezone). If no time given, datetime=null. Use next future occurrence for weekday names.
-{{"intent":"book|list|cancel|greet|unknown","procedure":"cleaning|filling|xray|extraction|implant|braces_consultation|retainer_fitting|null","datetime":"...|null","patient_name":"...|null"}}
+{{"intent":"book|list|cancel|greet|unknown","procedure":"cleaning|filling|xray|extraction|implant|braces_consultation|retainer_fitting|root_canal|null","datetime":"...|null","patient_name":"...|null"}}
 Message: "{message}"
 """
 
