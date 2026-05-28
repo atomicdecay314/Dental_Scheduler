@@ -70,6 +70,7 @@ class AppointmentRead(BaseModel):
     status: str
     start_time: datetime
     end_time: datetime
+    buffer_minutes: int = 0
     patient: PatientRead
     doctor: DoctorRead
     room: RoomRead
@@ -133,6 +134,40 @@ class TriggerWaitlistRequest(BaseModel):
     procedure: str
     freed_start: datetime
     freed_end: datetime
+
+
+# ---------------------------------------------------------------------------
+# DoctorAvailability
+# ---------------------------------------------------------------------------
+
+class DoctorAvailabilityCreate(BaseModel):
+    doctor_id: int
+    day_of_week: int
+    start_time: str
+    end_time: str
+
+class DoctorAvailabilityRead(DoctorAvailabilityCreate):
+    id: int
+    doctor_name: str
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# DoctorLeave
+# ---------------------------------------------------------------------------
+
+class DoctorLeaveCreate(BaseModel):
+    doctor_id: int
+    date_from: datetime
+    date_to: datetime
+    reason: str | None = None
+
+class DoctorLeaveRead(DoctorLeaveCreate):
+    id: int
+    doctor_name: str
+
+    model_config = {"from_attributes": True}
 
 
 # ---------------------------------------------------------------------------

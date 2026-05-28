@@ -12,11 +12,13 @@ from sqlalchemy.orm import Session
 import scheduler
 import waitlist as wl
 from database import Base, engine, SessionLocal
-from models import Doctor, Room, Patient, Appointment, ProcedureConfig, Waitlist
+from models import Doctor, Room, Patient, Appointment, ProcedureConfig, Waitlist, DoctorAvailability, DoctorLeave
 from schemas import (
     ChatRequest, AppointmentRead, SlotOption, DoctorRead,
     ProcedureConfigCreate, ProcedureConfigRead,
     WaitlistRead, TriggerWaitlistRequest,
+    DoctorAvailabilityCreate, DoctorAvailabilityRead,
+    DoctorLeaveCreate, DoctorLeaveRead,
 )
 
 Base.metadata.create_all(bind=engine)
@@ -30,11 +32,15 @@ def _migrate():
     from models import doctor_procedures, room_procedures
     db = SessionLocal()
     try:
-        rhea = db.query(Doctor).filter(Doctor.name == "Dr. Rhea Singh").first()
-        room2 = db.query(Room).filter(Room.name == "Room 2").first()
+        palash = db.query(Doctor).filter(Doctor.name == "Dr. Palash Mehta").first()
+        varun  = db.query(Doctor).filter(Doctor.name == "Dr. Varun Kumar").first()
+        rhea   = db.query(Doctor).filter(Doctor.name == "Dr. Rhea Singh").first()
+        room2  = db.query(Room).filter(Room.name == "Room 2").first()
+
         if not rhea or not room2:
             return
 
+        # root_canal associations
         existing_dp = db.execute(
             doctor_procedures.select().where(
                 doctor_procedures.c.doctor_id == rhea.id,
@@ -56,6 +62,17 @@ def _migrate():
         existing_cfg = db.query(ProcedureConfig).filter_by(procedure="root_canal", doctor_id=None).first()
         if not existing_cfg:
             db.add(ProcedureConfig(doctor_id=None, procedure="root_canal", duration_minutes=90, buffer_pct=10.0))
+
+        # DoctorAvailability — seed if no rows exist yet
+        if palash and varun and not db.query(DoctorAvailability).first():
+            avails = []
+            for day in range(5):           # Mon–Fri
+                avails.append(DoctorAvailability(doctor_id=palash.id, day_of_week=day, start_time="09:00", end_time="17:00"))
+            for day in [0, 2, 4]:          # Mon/Wed/Fri
+                avails.append(DoctorAvailability(doctor_id=varun.id, day_of_week=day, start_time="09:00", end_time="17:00"))
+            for day in [1, 3, 5]:          # Tue/Thu/Sat
+                avails.append(DoctorAvailability(doctor_id=rhea.id, day_of_week=day, start_time="10:00", end_time="16:00"))
+            db.add_all(avails)
 
         db.commit()
     except Exception:
@@ -85,7 +102,7 @@ VALID_PROCEDURES = {
     "implant", "braces_consultation", "retainer_fitting", "root_canal",
 }
 
-VALID_INTENTS = {"book", "list", "cancel", "greet", "unknown"}
+VALID_INTENTS = {"book", "list", "cancel", "reschedule", "greet", "unknown"}
 
 def get_db():
     db = SessionLocal()
@@ -103,7 +120,8 @@ def require_admin(admin_key: str = ""):
 EXTRACTION_PROMPT = """Extract from this dental clinic message. Return JSON only, no markdown.
 Today: {today} ({weekday}).
 Rules: datetime must be "YYYY-MM-DDThh:mm:ss" (no Z/timezone). If no time given, datetime=null. Use next future occurrence for weekday names.
-{{"intent":"book|list|cancel|greet|unknown","procedure":"cleaning|filling|xray|extraction|implant|braces_consultation|retainer_fitting|root_canal|null","datetime":"...|null","patient_name":"...|null"}}
+Use intent "reschedule" when the message contains move/change/reschedule an existing appointment; datetime should be the new requested time.
+{{"intent":"book|list|cancel|reschedule|greet|unknown","procedure":"cleaning|filling|xray|extraction|implant|braces_consultation|retainer_fitting|root_canal|null","datetime":"...|null","patient_name":"...|null"}}
 Message: "{message}"
 """
 
@@ -162,6 +180,10 @@ def fresh_state() -> dict:
         "awaiting_confirmation": False,
         "awaiting_contact": False,
         "pending_waitlist": False,
+        # Rescheduling state
+        "is_rescheduling": False,
+        "rescheduling_appt_id": None,
+        "old_start": None,
     }
 
 
@@ -191,7 +213,9 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
 
     # --- Slot confirmation step ---
     if state["awaiting_confirmation"]:
-        if CONFIRM_WAITLIST.match(msg):
+        is_reschedule = state.get("is_rescheduling", False)
+
+        if not is_reschedule and CONFIRM_WAITLIST.match(msg):
             name      = state["patient_name"]
             procedure = state["procedure"]
             orig      = state.get("original_start_time") or state["start_time"]
@@ -216,6 +240,15 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
             dur       = state.get("duration_minutes") or 60
             end       = start + timedelta(minutes=dur)
             patient   = scheduler.get_or_create_patient(db, name)
+
+            # For reschedule: cancel the old appointment first
+            if is_reschedule and state.get("rescheduling_appt_id"):
+                old_appt = db.get(Appointment, state["rescheduling_appt_id"])
+                if old_appt and old_appt.status == "scheduled":
+                    old_appt.status = "cancelled"
+                    db.commit()
+                    wl.trigger_waitlist(db, old_appt.procedure, old_appt.start_time, old_appt.end_time)
+
             try:
                 appt = scheduler.book_appointment(
                     db,
@@ -231,10 +264,21 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 state["start_time"] = None
                 return {"reply": f"That slot was just taken. Please try a different time. ({e})"}
 
-            doctor = db.get(Doctor, state["recommended_doctor_id"])
-            room   = db.get(Room,   state["recommended_room_id"])
+            doctor    = db.get(Doctor, state["recommended_doctor_id"])
+            room      = db.get(Room,   state["recommended_room_id"])
+            old_start = state.get("old_start")
             sessions[session_id] = fresh_state()
             sessions[session_id]["patient_name"] = name
+            if is_reschedule and old_start:
+                return {
+                    "reply": (
+                        f"Rescheduled. {name}'s {procedure.replace('_', ' ')} moved from "
+                        f"{old_start.strftime('%A %d %B at %I:%M %p')} to "
+                        f"{appt.start_time.strftime('%A %d %B %Y at %I:%M %p')} "
+                        f"with {doctor.name} in {room.name}."
+                    ),
+                    "booking_date": appt.start_time.strftime("%Y-%m-%d"),
+                }
             return {
                 "reply": (
                     f"Booked. {name} — {procedure.replace('_', ' ')} with {doctor.name} "
@@ -246,9 +290,11 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
         if CONFIRM_NO.match(msg):
             state["awaiting_confirmation"] = False
             state["start_time"] = None
-            return {"reply": "Understood. What date and time would the patient prefer?"}
+            return {"reply": "Understood. What's the new date and time you'd like?" if is_reschedule else "Understood. What date and time would the patient prefer?"}
 
-        return {"reply": "Please type 'confirm' to book the slot, 'no' to choose a different time, or 'waitlist' to join the queue."}
+        prompt = "Please type 'confirm' to confirm the reschedule, or 'no' to try a different time." if is_reschedule \
+            else "Please type 'confirm' to book the slot, 'no' to choose a different time, or 'waitlist' to join the queue."
+        return {"reply": prompt}
 
     # After contact info is collected, synthesise a book extraction from existing state
     # instead of trying to parse the phone/email string as a new message.
@@ -284,6 +330,97 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
             for a in appts
         ]
         return {"reply": f"Upcoming appointments for {name}:\n" + "\n".join(lines)}
+
+    # --- Reschedule intent ---
+    if intent == "reschedule" or state.get("is_rescheduling"):
+        procedure  = extracted.get("procedure")    or state.get("procedure")
+        name       = extracted.get("patient_name") or state.get("patient_name")
+        new_time   = extracted.get("datetime")     or (state.get("start_time") if state.get("is_rescheduling") else None)
+
+        if not name:
+            return {"reply": "Which patient needs to reschedule? Please provide their full name."}
+        state["patient_name"] = name
+
+        if not procedure:
+            return {"reply": "Which procedure needs to be rescheduled? (e.g. cleaning, filling, root canal)"}
+        state["procedure"] = procedure
+
+        # Find the appointment to reschedule (once)
+        if not state.get("rescheduling_appt_id"):
+            patient = db.query(Patient).filter_by(name=name).first()
+            if not patient:
+                return {"reply": f"No record found for '{name}'."}
+            appt_to_move = (
+                db.query(Appointment)
+                .filter(
+                    Appointment.patient_id == patient.id,
+                    Appointment.status == "scheduled",
+                    Appointment.start_time >= datetime.now(),
+                    Appointment.procedure == procedure,
+                )
+                .order_by(Appointment.start_time)
+                .first()
+            )
+            if not appt_to_move:
+                return {"reply": f"No upcoming {procedure.replace('_', ' ')} appointment found for {name}."}
+            state["rescheduling_appt_id"] = appt_to_move.id
+            state["old_start"]            = appt_to_move.start_time
+            state["is_rescheduling"]      = True
+
+        if state.get("duration_minutes") is None:
+            try:
+                dur, buf_pct = scheduler.get_duration(db, procedure, None)
+                state["duration_minutes"] = dur
+                state["buffer_minutes"]   = scheduler.get_buffer_minutes(dur, buf_pct)
+            except ValueError:
+                return {"reply": f"Sorry, I don't have a duration config for '{procedure.replace('_', ' ')}'."}
+
+        if not new_time:
+            old_start = state["old_start"]
+            return {"reply": f"What's the new date and time for {name}'s {procedure.replace('_', ' ')} (currently {old_start.strftime('%A %d %B at %I:%M %p')})?"}
+        state["start_time"] = new_time
+        if state.get("original_start_time") is None:
+            state["original_start_time"] = new_time
+
+        dur = state["duration_minutes"]
+        buf = state["buffer_minutes"]
+        end_time = new_time + timedelta(minutes=dur)
+        old_start = state["old_start"]
+
+        slot = scheduler.find_best_slot(db, procedure, new_time, end_time, buffer_minutes=buf)
+        if not slot:
+            next_slot = scheduler.find_next_available_slot(
+                db, procedure, new_time,
+                duration_minutes=dur, buffer_minutes=buf,
+            )
+            if next_slot:
+                next_doc, next_room, next_start = next_slot
+                state["recommended_doctor_id"] = next_doc.id
+                state["recommended_room_id"]   = next_room.id
+                state["start_time"]            = next_start
+                state["awaiting_confirmation"] = True
+                return {
+                    "reply": (
+                        f"No slot available at {new_time.strftime('%I:%M %p on %A %d %B')}. "
+                        f"Next available: {next_doc.name} in {next_room.name} on {next_start.strftime('%A %d %B at %I:%M %p')}. "
+                        f"Move {name}'s {procedure.replace('_', ' ')} from {old_start.strftime('%A %d %B at %I:%M %p')} to this slot? "
+                        f"Type 'confirm' or 'no'."
+                    )
+                }
+            state["start_time"] = None
+            return {"reply": f"No available slot found for a {procedure.replace('_', ' ')} in the next 7 days. Please try a different time."}
+
+        doctor, room = slot
+        state["recommended_doctor_id"] = doctor.id
+        state["recommended_room_id"]   = room.id
+        state["awaiting_confirmation"] = True
+        return {
+            "reply": (
+                f"Move {name}'s {procedure.replace('_', ' ')} from {old_start.strftime('%A %d %B at %I:%M %p')} "
+                f"to {new_time.strftime('%A %d %B %Y at %I:%M %p')} with {doctor.name} in {room.name}? "
+                f"Type 'confirm' or 'no'."
+            )
+        }
 
     # --- Cancel intent ---
     if intent == "cancel":
@@ -357,6 +494,32 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
         end_time = start_time + timedelta(minutes=dur)
         slot = scheduler.find_best_slot(db, procedure, start_time, end_time, buffer_minutes=buf)
         if not slot:
+            # Check if all qualified doctors are off that specific day of week
+            _DAY_NAMES = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+            qualified_docs = scheduler.get_doctors_for_procedure(db, procedure)
+            requested_weekday = start_time.weekday()
+            all_off_today = qualified_docs and all(
+                not scheduler.is_doctor_on_duty(db, d.id, start_time, end_time)
+                for d in qualified_docs
+            )
+            if all_off_today:
+                schedules = []
+                for doc in qualified_docs:
+                    avail_rows = (
+                        db.query(DoctorAvailability)
+                        .filter(DoctorAvailability.doctor_id == doc.id)
+                        .order_by(DoctorAvailability.day_of_week)
+                        .all()
+                    )
+                    if avail_rows:
+                        days = "/".join(_DAY_NAMES[a.day_of_week][:3] for a in avail_rows)
+                        schedules.append(f"{doc.name} works {days}")
+                msg = f"No doctors are available for {procedure.replace('_', ' ')} on {_DAY_NAMES[requested_weekday]}."
+                if schedules:
+                    msg += " " + ", ".join(schedules) + "."
+                state["start_time"] = None
+                return {"reply": msg}
+
             next_slot = scheduler.find_next_available_slot(
                 db, procedure, start_time,
                 duration_minutes=dur,
@@ -455,22 +618,28 @@ def list_doctors(db: Session = Depends(get_db)):
     return db.query(Doctor).order_by(Doctor.id).all()
 
 
+def _appointment_read(a: Appointment, db: Session) -> AppointmentRead:
+    try:
+        dur, buf_pct = scheduler.get_duration(db, a.procedure, a.doctor_id)
+        buf = scheduler.get_buffer_minutes(dur, buf_pct)
+    except ValueError:
+        buf = 0
+    return AppointmentRead(
+        id=a.id,
+        procedure=a.procedure,
+        status=a.status,
+        start_time=a.start_time,
+        end_time=a.end_time,
+        buffer_minutes=buf,
+        patient=a.patient,
+        doctor=a.doctor,
+        room=a.room,
+    )
+
+
 @app.get("/appointments", response_model=list[AppointmentRead])
 def list_all_appointments(db: Session = Depends(get_db)):
-    appts = scheduler.get_all_appointments(db)
-    return [
-        AppointmentRead(
-            id=a.id,
-            procedure=a.procedure,
-            status=a.status,
-            start_time=a.start_time,
-            end_time=a.end_time,
-            patient=a.patient,
-            doctor=a.doctor,
-            room=a.room,
-        )
-        for a in appts
-    ]
+    return [_appointment_read(a, db) for a in scheduler.get_all_appointments(db)]
 
 
 @app.delete("/appointments")
@@ -491,11 +660,7 @@ def cancel_appointment(appointment_id: int, db: Session = Depends(get_db)):
     db.commit()
     wl.trigger_waitlist(db, appt.procedure, appt.start_time, appt.end_time)
     db.refresh(appt)
-    return AppointmentRead(
-        id=appt.id, procedure=appt.procedure, status=appt.status,
-        start_time=appt.start_time, end_time=appt.end_time,
-        patient=appt.patient, doctor=appt.doctor, room=appt.room,
-    )
+    return _appointment_read(appt, db)
 
 
 # ---------------------------------------------------------------------------
@@ -599,3 +764,93 @@ def admin_trigger_waitlist(body: TriggerWaitlistRequest, admin_key: str = "", db
     require_admin(admin_key)
     booked = wl.trigger_waitlist(db, body.procedure, body.freed_start, body.freed_end)
     return {"booked_count": len(booked), "appointment_ids": [a.id for a in booked]}
+
+
+# ---------------------------------------------------------------------------
+# Admin — Doctor Availability
+# ---------------------------------------------------------------------------
+
+@app.get("/admin/availability", response_model=list[DoctorAvailabilityRead])
+def admin_list_availability(admin_key: str = "", db: Session = Depends(get_db)):
+    require_admin(admin_key)
+    rows = db.query(DoctorAvailability).order_by(DoctorAvailability.doctor_id, DoctorAvailability.day_of_week).all()
+    return [
+        DoctorAvailabilityRead(
+            id=r.id,
+            doctor_id=r.doctor_id,
+            doctor_name=r.doctor.name,
+            day_of_week=r.day_of_week,
+            start_time=r.start_time,
+            end_time=r.end_time,
+        )
+        for r in rows
+    ]
+
+
+@app.post("/admin/availability", response_model=DoctorAvailabilityRead)
+def admin_create_availability(body: DoctorAvailabilityCreate, admin_key: str = "", db: Session = Depends(get_db)):
+    require_admin(admin_key)
+    row = DoctorAvailability(**body.model_dump())
+    db.add(row)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="A schedule for this doctor/day already exists.")
+    db.refresh(row)
+    return DoctorAvailabilityRead(
+        id=row.id, doctor_id=row.doctor_id, doctor_name=row.doctor.name,
+        day_of_week=row.day_of_week, start_time=row.start_time, end_time=row.end_time,
+    )
+
+
+@app.delete("/admin/availability/{avail_id}")
+def admin_delete_availability(avail_id: int, admin_key: str = "", db: Session = Depends(get_db)):
+    require_admin(admin_key)
+    row = db.get(DoctorAvailability, avail_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Availability row not found.")
+    db.delete(row)
+    db.commit()
+    return {"message": "Deleted."}
+
+
+# ---------------------------------------------------------------------------
+# Admin — Doctor Leave
+# ---------------------------------------------------------------------------
+
+@app.get("/admin/leave", response_model=list[DoctorLeaveRead])
+def admin_list_leave(admin_key: str = "", db: Session = Depends(get_db)):
+    require_admin(admin_key)
+    rows = db.query(DoctorLeave).order_by(DoctorLeave.doctor_id, DoctorLeave.date_from).all()
+    return [
+        DoctorLeaveRead(
+            id=r.id, doctor_id=r.doctor_id, doctor_name=r.doctor.name,
+            date_from=r.date_from, date_to=r.date_to, reason=r.reason,
+        )
+        for r in rows
+    ]
+
+
+@app.post("/admin/leave", response_model=DoctorLeaveRead)
+def admin_create_leave(body: DoctorLeaveCreate, admin_key: str = "", db: Session = Depends(get_db)):
+    require_admin(admin_key)
+    row = DoctorLeave(**body.model_dump())
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return DoctorLeaveRead(
+        id=row.id, doctor_id=row.doctor_id, doctor_name=row.doctor.name,
+        date_from=row.date_from, date_to=row.date_to, reason=row.reason,
+    )
+
+
+@app.delete("/admin/leave/{leave_id}")
+def admin_delete_leave(leave_id: int, admin_key: str = "", db: Session = Depends(get_db)):
+    require_admin(admin_key)
+    row = db.get(DoctorLeave, leave_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Leave record not found.")
+    db.delete(row)
+    db.commit()
+    return {"message": "Deleted."}

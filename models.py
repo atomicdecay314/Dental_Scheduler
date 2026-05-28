@@ -1,5 +1,5 @@
 from datetime import datetime as _dt
-from sqlalchemy import Column, Integer, String, DateTime, Float, Boolean, ForeignKey, Table, event
+from sqlalchemy import Column, Integer, String, DateTime, Float, Boolean, ForeignKey, Table, UniqueConstraint, event
 from sqlalchemy.schema import DDL
 from sqlalchemy.orm import relationship
 from database import Base
@@ -68,6 +68,32 @@ class Appointment(Base):
     status = Column(String, default="scheduled", nullable=False)
 
     # No table-level unique constraints — see partial indexes below (status-aware)
+
+
+class DoctorAvailability(Base):
+    __tablename__ = "doctor_availability"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    doctor_id  = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    day_of_week = Column(Integer, nullable=False)   # 0=Monday … 6=Sunday
+    start_time = Column(String, nullable=False)     # "09:00"
+    end_time   = Column(String, nullable=False)     # "17:00"
+
+    doctor = relationship("Doctor")
+
+    __table_args__ = (UniqueConstraint("doctor_id", "day_of_week", name="uq_doctor_day"),)
+
+
+class DoctorLeave(Base):
+    __tablename__ = "doctor_leave"
+
+    id        = Column(Integer, primary_key=True, index=True)
+    doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    date_from = Column(DateTime, nullable=False)
+    date_to   = Column(DateTime, nullable=False)
+    reason    = Column(String, nullable=True)
+
+    doctor = relationship("Doctor")
 
 
 class ProcedureConfig(Base):

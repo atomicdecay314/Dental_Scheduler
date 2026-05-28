@@ -194,7 +194,13 @@
         <span class="material-symbols-outlined text-[18px] text-primary">calendar_month</span>
         Daily Schedule
       </h2>
-      <p class="text-label-sm text-on-surface-variant uppercase tracking-wider">Doctor View</p>
+      <div class="flex items-center gap-3">
+        <p class="text-label-sm text-on-surface-variant uppercase tracking-wider">Doctor View</p>
+        <div class="flex items-center gap-1.5 text-[11px] text-outline">
+          <div class="w-4 h-3 rounded-sm border-l-2 flex-shrink-0" style="border-color:rgba(59,130,246,0.35);background:repeating-linear-gradient(45deg,transparent,transparent 3px,rgba(59,130,246,0.12) 3px,rgba(59,130,246,0.12) 6px)"></div>
+          buffer
+        </div>
+      </div>
     </div>
 
     <!-- Grid -->
@@ -424,6 +430,8 @@
           status:    a.status,
         };
 
+        const bufferMins = a.buffer_minutes || 0;
+
         if (cancelled) {
           blocks += `<div class="absolute inset-x-1 rounded-lg border-l-4 border-gray-300 bg-gray-50 px-2 py-1 opacity-50 overflow-hidden cursor-pointer"
                           style="top:${top}px;height:${height}px"
@@ -444,6 +452,15 @@
               <span class="px-1.5 py-px bg-white/70 text-[9px] rounded text-primary font-bold uppercase">${a.room.name}</span>
             </div>` : ''}
           </div>`;
+          // Buffer band immediately below the appointment block
+          if (bufferMins > 0) {
+            const bufTop    = top + height;
+            const bufHeight = (bufferMins / 60) * PX_PER_HOUR;
+            blocks += `<div class="absolute inset-x-1 rounded-b-md pointer-events-none"
+              style="top:${bufTop}px;height:${bufHeight}px;background:repeating-linear-gradient(
+                45deg,transparent,transparent 3px,rgba(59,130,246,0.08) 3px,rgba(59,130,246,0.08) 6px
+              );border-left:2px solid rgba(59,130,246,0.2);"></div>`;
+          }
         }
       });
 

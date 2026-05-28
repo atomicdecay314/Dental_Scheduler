@@ -32,6 +32,10 @@
       class="px-4 py-2 rounded-t-lg font-medium border-b-2 border-transparent text-gray-500 bg-gray-200 hover:bg-white">
       <span class="material-symbols-outlined text-base">queue</span> Waitlist
     </button>
+    <button id="tab-availability" onclick="switchTab('availability')"
+      class="px-4 py-2 rounded-t-lg font-medium border-b-2 border-transparent text-gray-500 bg-gray-200 hover:bg-white">
+      <span class="material-symbols-outlined text-base">event_available</span> Availability
+    </button>
   </div>
 
   <main class="px-6 pb-10">
@@ -82,6 +86,7 @@
             <option value="implant">implant</option>
             <option value="braces_consultation">braces_consultation</option>
             <option value="retainer_fitting">retainer_fitting</option>
+            <option value="root_canal">root_canal</option>
           </select>
         </div>
         <div>
@@ -102,6 +107,127 @@
         </div>
       </form>
       <p id="proc-msg" class="mt-2 text-xs text-green-600 hidden"></p>
+    </section>
+
+    <!-- Availability Tab -->
+    <section id="panel-availability" class="bg-white rounded-b-lg rounded-tr-lg shadow p-5 hidden">
+
+      <!-- Working hours sub-section -->
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="font-semibold text-gray-600">Working Hours</h2>
+        <button onclick="loadAvailability()" class="text-xs text-blue-500 hover:underline flex items-center gap-1">
+          <span class="material-symbols-outlined text-sm">refresh</span> Refresh
+        </button>
+      </div>
+
+      <div class="overflow-x-auto mb-6">
+        <table class="w-full text-left border-collapse">
+          <thead>
+            <tr class="bg-gray-50 text-xs uppercase text-gray-500">
+              <th class="px-3 py-2 border-b">Doctor</th>
+              <th class="px-3 py-2 border-b">Day</th>
+              <th class="px-3 py-2 border-b">Start</th>
+              <th class="px-3 py-2 border-b">End</th>
+              <th class="px-3 py-2 border-b"></th>
+            </tr>
+          </thead>
+          <tbody id="avail-table-body">
+            <tr><td colspan="5" class="px-3 py-4 text-gray-400 text-center">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="font-medium text-gray-600 mb-3">Add Working Hours</h3>
+      <form onsubmit="createAvailability(event)" class="grid grid-cols-2 gap-3 max-w-lg mb-8">
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Doctor</label>
+          <select id="avail-doctor-id" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></select>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Day of Week</label>
+          <select id="avail-day" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="0">Monday</option>
+            <option value="1">Tuesday</option>
+            <option value="2">Wednesday</option>
+            <option value="3">Thursday</option>
+            <option value="4">Friday</option>
+            <option value="5">Saturday</option>
+            <option value="6">Sunday</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Start Time (HH:MM)</label>
+          <input id="avail-start" type="text" value="09:00" placeholder="09:00"
+            class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm" required />
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">End Time (HH:MM)</label>
+          <input id="avail-end" type="text" value="17:00" placeholder="17:00"
+            class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm" required />
+        </div>
+        <div class="col-span-2">
+          <button type="submit"
+            class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm flex items-center gap-1">
+            <span class="material-symbols-outlined text-base">add</span> Add Schedule
+          </button>
+        </div>
+      </form>
+
+      <!-- Leave sub-section -->
+      <hr class="border-gray-200 mb-6" />
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="font-semibold text-gray-600">Leave / Absences</h2>
+        <button onclick="loadLeave()" class="text-xs text-blue-500 hover:underline flex items-center gap-1">
+          <span class="material-symbols-outlined text-sm">refresh</span> Refresh
+        </button>
+      </div>
+
+      <div class="overflow-x-auto mb-6">
+        <table class="w-full text-left border-collapse">
+          <thead>
+            <tr class="bg-gray-50 text-xs uppercase text-gray-500">
+              <th class="px-3 py-2 border-b">Doctor</th>
+              <th class="px-3 py-2 border-b">From</th>
+              <th class="px-3 py-2 border-b">To</th>
+              <th class="px-3 py-2 border-b">Reason</th>
+              <th class="px-3 py-2 border-b"></th>
+            </tr>
+          </thead>
+          <tbody id="leave-table-body">
+            <tr><td colspan="5" class="px-3 py-4 text-gray-400 text-center">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="font-medium text-gray-600 mb-3">Record Leave</h3>
+      <form onsubmit="createLeave(event)" class="grid grid-cols-2 gap-3 max-w-lg">
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Doctor</label>
+          <select id="leave-doctor-id" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></select>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Reason (optional)</label>
+          <input id="leave-reason" type="text" placeholder="e.g. Conference"
+            class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm" />
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">From (YYYY-MM-DDTHH:MM)</label>
+          <input id="leave-from" type="datetime-local"
+            class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm" required />
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">To (YYYY-MM-DDTHH:MM)</label>
+          <input id="leave-to" type="datetime-local"
+            class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm" required />
+        </div>
+        <div class="col-span-2">
+          <button type="submit"
+            class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm flex items-center gap-1">
+            <span class="material-symbols-outlined text-base">add</span> Add Leave
+          </button>
+        </div>
+      </form>
+
     </section>
 
     <!-- Waitlist Tab -->
@@ -137,7 +263,7 @@
     // Tab switching
     // -----------------------------------------------------------------------
     function switchTab(tab) {
-      const tabs = ['procedures', 'waitlist'];
+      const tabs = ['procedures', 'waitlist', 'availability'];
       tabs.forEach(t => {
         document.getElementById(`tab-${t}`).className =
           t === tab
@@ -147,7 +273,10 @@
       });
       if (tab === 'procedures') loadProcedures();
       if (tab === 'waitlist') loadWaitlist();
+      if (tab === 'availability') { loadAvailability(); loadLeave(); }
     }
+
+    const DAY_NAMES = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 
     // -----------------------------------------------------------------------
     // Procedures tab
@@ -157,13 +286,26 @@
     async function loadDoctors() {
       const res = await fetch('/doctors');
       doctors = await res.json();
+
+      // Procedures form
       const sel = document.getElementById('form-doctor-id');
       sel.innerHTML = '<option value="">— Global fallback —</option>';
       doctors.forEach(d => {
         const opt = document.createElement('option');
-        opt.value = d.id;
-        opt.textContent = d.name;
+        opt.value = d.id; opt.textContent = d.name;
         sel.appendChild(opt);
+      });
+
+      // Availability & leave forms
+      ['avail-doctor-id', 'leave-doctor-id'].forEach(id => {
+        const s = document.getElementById(id);
+        if (!s) return;
+        s.innerHTML = '';
+        doctors.forEach(d => {
+          const opt = document.createElement('option');
+          opt.value = d.id; opt.textContent = d.name;
+          s.appendChild(opt);
+        });
       });
     }
 
@@ -349,6 +491,106 @@
       if (!iso) return '—';
       const d = new Date(iso);
       return d.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+
+    // -----------------------------------------------------------------------
+    // Availability tab
+    // -----------------------------------------------------------------------
+    async function loadAvailability() {
+      const res = await fetch(`/admin/availability${qs()}`);
+      if (!res.ok) { alert('Unauthorised — check your admin key.'); return; }
+      const rows = await res.json();
+      const tbody = document.getElementById('avail-table-body');
+      if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="px-3 py-4 text-gray-400 text-center">No working hours configured.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = rows.map(r => `
+        <tr class="border-b hover:bg-gray-50">
+          <td class="px-3 py-2">${r.doctor_name}</td>
+          <td class="px-3 py-2">${DAY_NAMES[r.day_of_week]}</td>
+          <td class="px-3 py-2 font-mono text-xs">${r.start_time}</td>
+          <td class="px-3 py-2 font-mono text-xs">${r.end_time}</td>
+          <td class="px-3 py-2">
+            <button onclick="deleteAvailability(${r.id})"
+              class="text-red-500 hover:text-red-700 flex items-center gap-0.5 text-xs">
+              <span class="material-symbols-outlined text-base">delete</span> Remove
+            </button>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    async function deleteAvailability(id) {
+      if (!confirm('Remove this working hours entry?')) return;
+      const res = await fetch(`/admin/availability/${id}${qs()}`, { method: 'DELETE' });
+      if (res.ok) loadAvailability();
+      else alert('Failed to delete.');
+    }
+
+    async function createAvailability(e) {
+      e.preventDefault();
+      const body = {
+        doctor_id:   parseInt(document.getElementById('avail-doctor-id').value),
+        day_of_week: parseInt(document.getElementById('avail-day').value),
+        start_time:  document.getElementById('avail-start').value,
+        end_time:    document.getElementById('avail-end').value,
+      };
+      const res = await fetch(`/admin/availability${qs()}`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+      });
+      if (res.ok) { showToast('Working hours added.'); loadAvailability(); }
+      else { const err = await res.json(); showToast(`Error: ${JSON.stringify(err.detail)}`, true); }
+    }
+
+    // -----------------------------------------------------------------------
+    // Leave tab
+    // -----------------------------------------------------------------------
+    async function loadLeave() {
+      const res = await fetch(`/admin/leave${qs()}`);
+      if (!res.ok) { alert('Unauthorised — check your admin key.'); return; }
+      const rows = await res.json();
+      const tbody = document.getElementById('leave-table-body');
+      if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="px-3 py-4 text-gray-400 text-center">No leave records.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = rows.map(r => `
+        <tr class="border-b hover:bg-gray-50">
+          <td class="px-3 py-2">${r.doctor_name}</td>
+          <td class="px-3 py-2 text-xs">${fmtDt(r.date_from)}</td>
+          <td class="px-3 py-2 text-xs">${fmtDt(r.date_to)}</td>
+          <td class="px-3 py-2 text-gray-500 italic text-xs">${r.reason || '—'}</td>
+          <td class="px-3 py-2">
+            <button onclick="deleteLeave(${r.id})"
+              class="text-red-500 hover:text-red-700 flex items-center gap-0.5 text-xs">
+              <span class="material-symbols-outlined text-base">delete</span> Remove
+            </button>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    async function deleteLeave(id) {
+      if (!confirm('Remove this leave record?')) return;
+      const res = await fetch(`/admin/leave/${id}${qs()}`, { method: 'DELETE' });
+      if (res.ok) loadLeave();
+      else alert('Failed to delete.');
+    }
+
+    async function createLeave(e) {
+      e.preventDefault();
+      const body = {
+        doctor_id: parseInt(document.getElementById('leave-doctor-id').value),
+        date_from: document.getElementById('leave-from').value,
+        date_to:   document.getElementById('leave-to').value,
+        reason:    document.getElementById('leave-reason').value || null,
+      };
+      const res = await fetch(`/admin/leave${qs()}`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+      });
+      if (res.ok) { showToast('Leave recorded.'); loadLeave(); }
+      else { const err = await res.json(); showToast(`Error: ${JSON.stringify(err.detail)}`, true); }
     }
 
     // -----------------------------------------------------------------------

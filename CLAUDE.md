@@ -43,15 +43,16 @@ POST /chat  →  main.py (session state + Gemini extraction)
 **Key design decisions:**
 
 - `sessions` in `main.py` is an in-memory dict keyed by `session_id`. It holds partial booking state (`procedure`, `start_time`, `patient_name`, `recommended_doctor_id`, `recommended_room_id`, `awaiting_confirmation`) across turns. Lost on server restart — production would use Redis.
-- Gemini (`gemini-2.5-flash-lite`) extracts structured JSON (intent, procedure, datetime, patient_name) from every message. The extraction prompt is in `EXTRACTION_PROMPT` and returns one of: `book | list | cancel | greet | unknown`.
+- Gemini (`gemini-2.5-flash-lite`) extracts structured JSON (intent, procedure, datetime, patient_name) from every message. The extraction prompt is in `EXTRACTION_PROMPT` and returns one of: `book | list | cancel | reschedule | greet | unknown`.
 - Procedure-to-doctor and procedure-to-room mappings use `doctor_procedures` and `room_procedures` association tables (not columns). The procedure string is the join key — it must match exactly across seed data and `VALID_PROCEDURES` in `main.py`.
 - Double-booking is two-layered: range overlap queries in `scheduler.py` (`start_time < end AND end_time > start`) plus DB `UniqueConstraint` on exact `start_time` as a fallback.
-- `find_best_slot` scores (doctor, room) pairs by idle-time minimisation — prefers slots that fill gaps around existing appointments. `find_next_available_slot` scans forward (in `min(duration, 30)`-minute steps plus appointment end-time candidates) up to 7 days when the requested slot is unavailable.
-- `AppointmentRead` in `schemas.py` returns fully nested patient/doctor/room objects — no second request needed. `Appointment.status` is one of: `scheduled`, `cancelled`, `completed`, `no_show`.
-- The frontend (`static/index.html`) is a single-file Tailwind + Material Symbols UI with a collapsible chat panel and a live daily timetable. It calls `POST /chat`, `GET /appointments`, `GET /doctors`, and `DELETE /appointments`.
-- `static/admin.html` (served at `/admin`) is an admin panel with two tabs: **Procedures** (manage `ProcedureConfig` rows) and **Waitlist** (promote, remove, and trigger reassignment for pending entries). All admin routes require `?admin_key=` matching `ADMIN_KEY`.
+- `find_best_slot` scores (doctor, room) pairs by idle-time minimisation — prefers slots that fill gaps around existing appointments. `find_next_available_slot` scans forward (in `min(duration, 30)`-minute steps plus appointment end-time candidates) up to 7 days when the requested slot is unavailable. Candidates for days where no qualified doctor is on duty are skipped before even calling `find_best_slot`.
+- `AppointmentRead` in `schemas.py` returns fully nested patient/doctor/room objects plus `buffer_minutes` — no second request needed. `Appointment.status` is one of: `scheduled`, `cancelled`, `completed`, `no_show`.
+- The frontend (`static/index.html`) is a single-file Tailwind + Material Symbols UI with a collapsible chat panel and a live daily timetable. It calls `POST /chat`, `GET /appointments`, `GET /doctors`, and `DELETE /appointments`. Each appointment block shows a hatched buffer band below it using `buffer_minutes` from the API.
+- `static/admin.html` (served at `/admin`) is an admin panel with three tabs: **Procedures** (manage `ProcedureConfig` rows), **Waitlist** (promote, remove, and trigger reassignment), and **Availability** (manage `DoctorAvailability` working hours and `DoctorLeave` records). All admin routes require `?admin_key=` matching `ADMIN_KEY`.
 - **Duration lookup chain** (`scheduler.get_duration`): queries `ProcedureConfig` for matching `(procedure, doctor_id)` first → then `(procedure, doctor_id=NULL)` global fallback → raises `ValueError` if neither found.
 - **Buffer convention**: `buffer_minutes` is applied only during availability checks (`Appointment.end_time > start - buffer`). The `end_time` stored on a booked `Appointment` is always `start + duration` — no buffer included in the stored value.
+- **Doctor availability**: `is_doctor_available` now checks three things in order: `is_doctor_on_duty` (DoctorAvailability row must exist for that weekday and times must fall within hours), `is_doctor_on_leave` (no DoctorLeave record covering the window), and overlap with existing appointments. If no DoctorAvailability rows exist for a doctor at all, all days are allowed (backward-compat).
 
 **Adding a new procedure:** add it to `seed.py` (doctor and room associations) and to `VALID_PROCEDURES` in `main.py`, then re-seed.
 
@@ -62,3 +63,12 @@ POST /chat  →  main.py (session state + Gemini extraction)
 4. Extract patient name → ask if missing
 5. Check contact info — if patient has no phone AND no email, ask and await response
 6. `find_best_slot` → if taken, `find_next_available_slot` → confirm or 'waitlist' to join queue → `book_appointment`
+7. If all qualified doctors are off on the requested day, returns a specific message listing each doctor's working days dynamically from `DoctorAvailability`.
+
+**Chatbot reschedule flow** (`intent == "reschedule"`):
+1. Extract patient name and procedure
+2. Find earliest upcoming scheduled appointment matching that procedure
+3. Ask for new datetime if not provided
+4. `find_best_slot` / `find_next_available_slot` for the new time
+5. Present: "Move [name]'s [procedure] from [old time] to [new time]? Type 'confirm' or 'no'."
+6. On confirm: old appointment → `cancelled`, `trigger_waitlist` on freed slot, book new appointment.

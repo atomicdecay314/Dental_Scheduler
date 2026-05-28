@@ -1,10 +1,14 @@
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as _time
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from models import Doctor, Room, Patient, Appointment, ProcedureConfig, doctor_procedures, room_procedures
+from models import (
+    Doctor, Room, Patient, Appointment, ProcedureConfig,
+    DoctorAvailability, DoctorLeave,
+    doctor_procedures, room_procedures,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -73,8 +77,41 @@ def get_or_create_patient(db: Session, name: str, phone: str | None = None, emai
 # Availability check — core double-booking logic
 # ---------------------------------------------------------------------------
 
+def is_doctor_on_duty(db: Session, doctor_id: int, start: datetime, end: datetime) -> bool:
+    """True if a DoctorAvailability row covers start's weekday and start/end times fall within it.
+    Returns True when no availability rows exist at all (backward-compat with unseeded DBs)."""
+    avail = db.query(DoctorAvailability).filter(
+        DoctorAvailability.doctor_id == doctor_id,
+        DoctorAvailability.day_of_week == start.weekday(),
+    ).first()
+    if avail is None:
+        # If there are *any* rows for this doctor, the absence means day off.
+        # If there are no rows at all (unseeded), allow the slot.
+        has_any = db.query(DoctorAvailability).filter(
+            DoctorAvailability.doctor_id == doctor_id
+        ).first()
+        return has_any is None
+    avail_start = _time(*map(int, avail.start_time.split(":")))
+    avail_end   = _time(*map(int, avail.end_time.split(":")))
+    return start.time() >= avail_start and end.time() <= avail_end
+
+
+def is_doctor_on_leave(db: Session, doctor_id: int, start: datetime, end: datetime) -> bool:
+    """True if any leave record fully covers the start–end window."""
+    leave = db.query(DoctorLeave).filter(
+        DoctorLeave.doctor_id == doctor_id,
+        DoctorLeave.date_from <= start,
+        DoctorLeave.date_to   >= end,
+    ).first()
+    return leave is not None
+
+
 def is_doctor_available(db: Session, doctor_id: int, start: datetime, end: datetime, buffer_minutes: int = 0) -> bool:
-    """True if the doctor has no appointment overlapping the requested window (respecting buffer)."""
+    """True if the doctor is on duty, not on leave, and has no conflicting appointment."""
+    if not is_doctor_on_duty(db, doctor_id, start, end):
+        return False
+    if is_doctor_on_leave(db, doctor_id, start, end):
+        return False
     effective_start = start - timedelta(minutes=buffer_minutes)
     conflict = db.query(Appointment).filter(
         Appointment.doctor_id == doctor_id,
@@ -207,6 +244,19 @@ def find_next_available_slot(
             candidate = appt.end_time + timedelta(minutes=buffer_minutes)
             if clinic_start <= candidate.hour < clinic_end:
                 candidates.add(candidate)
+
+    # Determine which days of week at least one qualified doctor is on duty.
+    # If no DoctorAvailability rows exist at all, allow all days (unseeded DB).
+    duty_weekdays: set[int] | None = None
+    if doctor_ids:
+        avail_rows = db.query(DoctorAvailability).filter(
+            DoctorAvailability.doctor_id.in_(doctor_ids)
+        ).all()
+        if avail_rows:
+            duty_weekdays = {r.day_of_week for r in avail_rows}
+
+    if duty_weekdays is not None:
+        candidates = {c for c in candidates if c.weekday() in duty_weekdays}
 
     for slot_time in sorted(candidates):
         if slot_time <= from_time:

@@ -1,5 +1,5 @@
 from database import Base, engine, SessionLocal
-from models import Doctor, Room, Patient, ProcedureConfig, doctor_procedures, room_procedures
+from models import Doctor, Room, Patient, ProcedureConfig, DoctorAvailability, doctor_procedures, room_procedures
 
 Base.metadata.create_all(bind=engine)
 
@@ -10,6 +10,9 @@ def seed():
         # Skip if already seeded — prevents duplicates on repeated runs
         if db.query(Doctor).first():
             print("Database already seeded, skipping.")
+            return
+        if db.query(DoctorAvailability).first():
+            print("Availability already seeded, skipping.")
             return
 
         doctors = [
@@ -65,6 +68,19 @@ def seed():
             ProcedureConfig(doctor_id=doctors[1].id, procedure="extraction",  duration_minutes=75,  buffer_pct=10.0),  # Dr. Varun Kumar slower
         ]
         db.add_all(procedure_configs)
+
+        # Doctor working hours
+        # Dr. Palash Mehta: Mon–Fri 09:00–17:00
+        availability = []
+        for day in range(5):
+            availability.append(DoctorAvailability(doctor_id=doctors[0].id, day_of_week=day, start_time="09:00", end_time="17:00"))
+        # Dr. Varun Kumar: Mon/Wed/Fri 09:00–17:00
+        for day in [0, 2, 4]:
+            availability.append(DoctorAvailability(doctor_id=doctors[1].id, day_of_week=day, start_time="09:00", end_time="17:00"))
+        # Dr. Rhea Singh: Tue/Thu/Sat 10:00–16:00
+        for day in [1, 3, 5]:
+            availability.append(DoctorAvailability(doctor_id=doctors[2].id, day_of_week=day, start_time="10:00", end_time="16:00"))
+        db.add_all(availability)
 
         patients = [
             Patient(name="Dhruv Sawant",    phone="8562202171", email="dhryv@example.com"),
