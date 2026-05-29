@@ -47,7 +47,7 @@ POST /chat  →  main.py (session state + Gemini extraction)
 - Procedure-to-doctor and procedure-to-room mappings use `doctor_procedures` and `room_procedures` association tables (not columns). The procedure string is the join key — it must match exactly across seed data and `VALID_PROCEDURES` in `main.py`.
 - Double-booking is two-layered: range overlap queries in `scheduler.py` (`start_time < end AND end_time > start`) plus DB `UniqueConstraint` on exact `start_time` as a fallback.
 - `find_best_slot` scores (doctor, room) pairs by idle-time minimisation — prefers slots that fill gaps around existing appointments. `find_next_available_slot` scans forward (in `min(duration, 30)`-minute steps plus appointment end-time candidates) up to 7 days when the requested slot is unavailable. Candidates for days where no qualified doctor is on duty are skipped before even calling `find_best_slot`.
-- `AppointmentRead` in `schemas.py` returns fully nested patient/doctor/room objects plus `buffer_minutes` — no second request needed. `Appointment.status` is one of: `scheduled`, `cancelled`, `completed`, `no_show`.
+- `AppointmentRead` in `schemas.py` returns fully nested patient/doctor/room objects plus `buffer_minutes`, `actual_end_time`, and `completed_at` — no second request needed. `Appointment.status` is one of: `scheduled`, `cancelled`, `completed`, `no_show`, `completed_early`.
 - The frontend (`static/index.html`) is a single-file Tailwind + Material Symbols UI with a collapsible chat panel and a live daily timetable. It calls `POST /chat`, `GET /appointments`, `GET /doctors`, and `DELETE /appointments`. Each appointment block shows a hatched buffer band below it using `buffer_minutes` from the API.
 - `static/admin.html` (served at `/admin`) is an admin panel with three tabs: **Procedures** (manage `ProcedureConfig` rows), **Waitlist** (promote, remove, and trigger reassignment), and **Availability** (manage `DoctorAvailability` working hours and `DoctorLeave` records). All admin routes require `?admin_key=` matching `ADMIN_KEY`.
 - **Duration lookup chain** (`scheduler.get_duration`): queries `ProcedureConfig` for matching `(procedure, doctor_id)` first → then `(procedure, doctor_id=NULL)` global fallback → raises `ValueError` if neither found.
@@ -64,6 +64,14 @@ POST /chat  →  main.py (session state + Gemini extraction)
 5. Check contact info — if patient has no phone AND no email, ask and await response
 6. `find_best_slot` → if taken, `find_next_available_slot` → confirm or 'waitlist' to join queue → `book_appointment`
 7. If all qualified doctors are off on the requested day, returns a specific message listing each doctor's working days dynamically from `DoctorAvailability`.
+
+**Early completion** (`POST /appointments/{id}/end-early`, chat intent `early_end`):
+- Records `actual_end_time` and sets `status = "completed_early"` on the appointment.
+- `compute_freed_gap` in `scheduler.py`: computes freed minutes between `actual_end_time + buffer` and the next scheduled appointment for that doctor (or clinic close at 17:00 if none). Buffer uses `get_duration` with `actual_end_time` as the reference — not original `end_time`.
+- `get_minimum_procedure_duration` queries `MIN(duration_minutes)` from global `ProcedureConfig` rows; falls back to 20 if empty.
+- If freed gap ≥ minimum procedure duration: `trigger_waitlist` is called for the freed window.
+- Timetable renders completed_early as a green block (start → actual_end) + a grey hatched "freed" band (actual_end → original end). Legend swatches show both buffer and freed.
+- "End early" button appears in the appointment popup only when the appointment is in-progress (`status === 'scheduled'` and `start_time <= now`).
 
 **Chatbot reschedule flow** (`intent == "reschedule"`):
 1. Extract patient name and procedure

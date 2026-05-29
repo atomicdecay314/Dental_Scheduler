@@ -200,6 +200,10 @@
           <div class="w-4 h-3 rounded-sm border-l-2 flex-shrink-0" style="border-color:rgba(59,130,246,0.35);background:repeating-linear-gradient(45deg,transparent,transparent 3px,rgba(59,130,246,0.12) 3px,rgba(59,130,246,0.12) 6px)"></div>
           buffer
         </div>
+        <div class="flex items-center gap-1.5 text-[11px] text-outline">
+          <div class="w-4 h-3 rounded-sm border-l-2 flex-shrink-0" style="border-color:rgba(156,163,175,0.6);background:repeating-linear-gradient(45deg,transparent,transparent 3px,rgba(156,163,175,0.2) 3px,rgba(156,163,175,0.2) 6px)"></div>
+          freed
+        </div>
       </div>
     </div>
 
@@ -418,19 +422,22 @@
         // Store full data in global lookup so onclick can retrieve it safely (avoids JSON-in-attribute quoting issues)
         window._apptLookup = window._apptLookup || {};
         window._apptLookup[a.id] = {
-          id:        a.id,
-          patient:   a.patient.name,
-          phone:     a.patient.phone  || '—',
-          email:     a.patient.email  || '—',
-          procedure: a.procedure.replace(/_/g,' '),
-          start:     fmtT(start),
-          end:       fmtT(end),
-          room:      a.room.name,
-          doctor:    a.doctor.name,
-          status:    a.status,
+          id:            a.id,
+          patient:       a.patient.name,
+          phone:         a.patient.phone  || '—',
+          email:         a.patient.email  || '—',
+          procedure:     a.procedure.replace(/_/g,' '),
+          start:         fmtT(start),
+          end:           fmtT(end),
+          room:          a.room.name,
+          doctor:        a.doctor.name,
+          status:        a.status,
+          raw_start_iso: a.start_time,
+          actual_end_iso: a.actual_end_time || null,
         };
 
         const bufferMins = a.buffer_minutes || 0;
+        const isEarlyEnd = a.status === 'completed_early' && a.actual_end_time;
 
         if (cancelled) {
           blocks += `<div class="absolute inset-x-1 rounded-lg border-l-4 border-gray-300 bg-gray-50 px-2 py-1 opacity-50 overflow-hidden cursor-pointer"
@@ -438,6 +445,25 @@
                           onclick="showApptPopup(event,${a.id})">
             <p class="font-medium text-[11px] text-gray-400 truncate line-through">${a.patient.name}</p>
             <p class="text-[10px] text-gray-400">${fmtT(start)} · cancelled</p>
+          </div>`;
+        } else if (isEarlyEnd) {
+          const actualEnd    = new Date(a.actual_end_time);
+          const actualEndTop = toTop(actualEnd);
+          const doneHeight   = Math.max((actualEnd - start) / 3600000 * PX_PER_HOUR - 2, 16);
+          const freedHeight  = Math.max((end - actualEnd) / 3600000 * PX_PER_HOUR, 8);
+          // Completed portion (green)
+          blocks += `<div class="absolute inset-x-1 rounded-t-lg border-l-4 border-green-400 bg-green-50 shadow-sm px-2 py-1.5 overflow-hidden cursor-pointer hover:brightness-95 transition-all"
+                          style="top:${top}px;height:${doneHeight}px"
+                          onclick="showApptPopup(event,${a.id})">
+            <p class="font-bold text-[12px] text-green-700 truncate">${a.patient.name}</p>
+            ${doneHeight >= 36 ? `<p class="text-[10px] text-green-600 capitalize truncate">${a.procedure.replace(/_/g,' ')} · ended ${fmtT(actualEnd)}</p>` : ''}
+          </div>`;
+          // Freed band (grey hatched) from actual_end to original end
+          blocks += `<div class="absolute inset-x-1 rounded-b-md pointer-events-none overflow-hidden"
+            style="top:${actualEndTop}px;height:${freedHeight}px;background:repeating-linear-gradient(
+              45deg,transparent,transparent 3px,rgba(156,163,175,0.2) 3px,rgba(156,163,175,0.2) 6px
+            );border-left:2px solid rgba(156,163,175,0.5);border:1px dashed rgba(156,163,175,0.4);">
+            ${freedHeight >= 14 ? `<p class="text-[9px] text-gray-400 ml-1 mt-0.5 font-semibold uppercase tracking-wide">freed</p>` : ''}
           </div>`;
         } else {
           const showProcedure = height >= 36;
@@ -504,9 +530,11 @@
 
     const statusColor = d.status === 'cancelled'
       ? 'bg-gray-100 text-gray-500'
-      : d.status === 'scheduled'
-        ? 'bg-blue-50 text-blue-700'
-        : 'bg-green-50 text-green-700';
+      : d.status === 'completed_early'
+        ? 'bg-amber-50 text-amber-700'
+        : d.status === 'scheduled'
+          ? 'bg-blue-50 text-blue-700'
+          : 'bg-green-50 text-green-700';
 
     popup.innerHTML = `
       <div class="flex items-start justify-between mb-3">
@@ -548,14 +576,23 @@
           </div>
         </div>` : ''}
       </div>
-      ${d.status !== 'cancelled' ? `
-      <div class="mt-4 pt-3 border-t border-border-subtle">
-        <button onclick="cancelAppt(${d.id})"
-          class="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 text-red-600 text-[13px] font-medium hover:bg-red-50 transition-colors">
-          <span class="material-symbols-outlined text-[16px]">event_busy</span>
-          Cancel booking
-        </button>
-      </div>` : ''}`;
+      ${d.status !== 'cancelled' ? (() => {
+        const now        = new Date();
+        const apptStart  = new Date(d.raw_start_iso);
+        const inProgress = d.status === 'scheduled' && apptStart <= now;
+        return `<div class="mt-4 pt-3 border-t border-border-subtle space-y-2">
+          <button onclick="cancelAppt(${d.id})"
+            class="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 text-red-600 text-[13px] font-medium hover:bg-red-50 transition-colors">
+            <span class="material-symbols-outlined text-[16px]">event_busy</span>
+            Cancel booking
+          </button>
+          ${inProgress ? `<button onclick="endApptEarly(${d.id})"
+            class="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-amber-200 text-amber-700 text-[13px] font-medium hover:bg-amber-50 transition-colors">
+            <span class="material-symbols-outlined text-[16px]">timer_off</span>
+            End early
+          </button>` : ''}
+        </div>`;
+      })() : ''}`;
 
     // Position near click, keep within viewport
     const vw = window.innerWidth, vh = window.innerHeight;
@@ -573,6 +610,40 @@
 
   function hideApptPopup() {
     document.getElementById('appt-popup').classList.add('hidden');
+  }
+
+  async function endApptEarly(id) {
+    const timeStr = prompt('Actual finish time (e.g. 10:40):');
+    if (!timeStr) return;
+
+    const d       = window._apptLookup[id];
+    const apptDate = d.raw_start_iso.split('T')[0];
+    const actualEnd = new Date(`${apptDate}T${timeStr}:00`);
+
+    if (isNaN(actualEnd.getTime())) {
+      alert('Invalid time format. Use HH:MM (e.g. 10:40).');
+      return;
+    }
+
+    const res = await fetch(`/appointments/${id}/end-early`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ actual_end_time: actualEnd.toISOString() }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      alert('Error: ' + (data.detail || 'unknown'));
+      return;
+    }
+
+    hideApptPopup();
+    await loadTimetable();
+
+    const msg = data.waitlist_triggered
+      ? `Appointment ended early. ${data.freed_minutes} min freed — waitlist notified.`
+      : `Appointment ended early. ${data.freed_minutes} min freed (too short to rebook — ${data.reason})`;
+    addMessage('bot', msg);
   }
 
   async function cancelAppt(id) {

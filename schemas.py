@@ -70,12 +70,18 @@ class AppointmentRead(BaseModel):
     status: str
     start_time: datetime
     end_time: datetime
+    actual_end_time: datetime | None = None
+    completed_at: datetime | None = None
     buffer_minutes: int = 0
     patient: PatientRead
     doctor: DoctorRead
     room: RoomRead
 
     model_config = {"from_attributes": True}
+
+
+class EarlyEndRequest(BaseModel):
+    actual_end_time: datetime
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 import math
 from datetime import datetime, timedelta, time as _time
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 
 from models import (
@@ -61,6 +61,45 @@ def get_duration(db: Session, procedure: str, doctor_id: int | None) -> tuple[in
 
 def get_buffer_minutes(duration_minutes: int, buffer_pct: float) -> int:
     return math.ceil(duration_minutes * buffer_pct / 100)
+
+
+def get_minimum_procedure_duration(db: Session) -> int:
+    """Return the smallest global duration_minutes across all procedure configs, or 20 as fallback."""
+    result = db.query(func.min(ProcedureConfig.duration_minutes)).filter(
+        ProcedureConfig.doctor_id.is_(None)
+    ).scalar()
+    return result if result is not None else 20
+
+
+def get_next_appointment_for_doctor(db: Session, doctor_id: int, after: datetime) -> "Appointment | None":
+    """Return the earliest scheduled appointment for a doctor after a given time."""
+    return (
+        db.query(Appointment)
+        .filter(
+            Appointment.doctor_id == doctor_id,
+            Appointment.status == "scheduled",
+            Appointment.start_time > after,
+        )
+        .order_by(Appointment.start_time)
+        .first()
+    )
+
+
+def compute_freed_gap(db: Session, appointment: "Appointment") -> int:
+    """
+    Compute freed minutes between actual_end_time + buffer and the next appointment (or clinic close).
+    appointment.actual_end_time must be set before calling this.
+    """
+    dur, buf_pct = get_duration(db, appointment.procedure, appointment.doctor_id)
+    buf = get_buffer_minutes(dur, buf_pct)
+    effective_freed_start = appointment.actual_end_time + timedelta(minutes=buf)
+    next_appt = get_next_appointment_for_doctor(db, appointment.doctor_id, after=appointment.actual_end_time)
+    if next_appt is None:
+        clinic_close = appointment.end_time.replace(hour=17, minute=0, second=0, microsecond=0)
+        gap = (clinic_close - effective_freed_start).total_seconds() / 60
+    else:
+        gap = (next_appt.start_time - effective_freed_start).total_seconds() / 60
+    return int(gap)
 
 
 def get_or_create_patient(db: Session, name: str, phone: str | None = None, email: str | None = None) -> Patient:

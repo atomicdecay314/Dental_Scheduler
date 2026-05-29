@@ -65,7 +65,10 @@ class Appointment(Base):
     doctor = relationship("Doctor", back_populates="appointments")
     room = relationship("Room", back_populates="appointments")
 
+    # status: scheduled | cancelled | completed | no_show | completed_early
     status = Column(String, default="scheduled", nullable=False)
+    actual_end_time = Column(DateTime, nullable=True)   # set when appointment ends early
+    completed_at    = Column(DateTime, nullable=True)   # timestamp of last status→completed/completed_early
 
     # No table-level unique constraints — see partial indexes below (status-aware)
 

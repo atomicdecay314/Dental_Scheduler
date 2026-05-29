@@ -19,6 +19,7 @@ from schemas import (
     WaitlistRead, TriggerWaitlistRequest,
     DoctorAvailabilityCreate, DoctorAvailabilityRead,
     DoctorLeaveCreate, DoctorLeaveRead,
+    EarlyEndRequest,
 )
 
 Base.metadata.create_all(bind=engine)
@@ -80,6 +81,16 @@ def _migrate():
     finally:
         db.close()
 
+    # New nullable columns on appointments
+    import sqlalchemy as sa
+    with engine.connect() as conn:
+        for col, typedef in [("actual_end_time", "DATETIME"), ("completed_at", "DATETIME")]:
+            try:
+                conn.execute(sa.text(f"ALTER TABLE appointments ADD COLUMN {col} {typedef}"))
+                conn.commit()
+            except Exception:
+                pass  # column already exists
+
 
 _migrate()
 
@@ -102,7 +113,7 @@ VALID_PROCEDURES = {
     "implant", "braces_consultation", "retainer_fitting", "root_canal",
 }
 
-VALID_INTENTS = {"book", "list", "cancel", "reschedule", "greet", "unknown"}
+VALID_INTENTS = {"book", "list", "cancel", "reschedule", "early_end", "greet", "unknown"}
 
 def get_db():
     db = SessionLocal()
@@ -121,7 +132,8 @@ EXTRACTION_PROMPT = """Extract from this dental clinic message. Return JSON only
 Today: {today} ({weekday}).
 Rules: datetime must be "YYYY-MM-DDThh:mm:ss" (no Z/timezone). If no time given, datetime=null. Use next future occurrence for weekday names.
 Use intent "reschedule" when the message contains move/change/reschedule an existing appointment; datetime should be the new requested time.
-{{"intent":"book|list|cancel|reschedule|greet|unknown","procedure":"cleaning|filling|xray|extraction|implant|braces_consultation|retainer_fitting|root_canal|null","datetime":"...|null","patient_name":"...|null"}}
+Use intent "early_end" when the message indicates an appointment finished early (e.g. "Rahul's cleaning ended at 10:40", "appointment finished early", "end early for [name]"); datetime should be the actual finish time if mentioned.
+{{"intent":"book|list|cancel|reschedule|early_end|greet|unknown","procedure":"cleaning|filling|xray|extraction|implant|braces_consultation|retainer_fitting|root_canal|null","datetime":"...|null","patient_name":"...|null"}}
 Message: "{message}"
 """
 
@@ -153,7 +165,13 @@ def extract(message: str) -> dict:
             if "+" in raw_dt[10:]:
                 raw_dt = raw_dt[:raw_dt.index("+", 10)]
             dt = datetime.fromisoformat(raw_dt)
-            start_time = dt if (dt.hour != 0 or dt.minute != 0) else None
+            if dt.hour == 0 and dt.minute == 0:
+                dt = None
+            elif dt.date() < datetime.now().date():
+                # Gemini sometimes returns a past weekday — advance by weeks until date is today or later
+                while dt.date() < datetime.now().date():
+                    dt += timedelta(weeks=1)
+            start_time = dt
         except (ValueError, IndexError):
             pass
 
@@ -332,7 +350,10 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
         return {"reply": f"Upcoming appointments for {name}:\n" + "\n".join(lines)}
 
     # --- Reschedule intent ---
-    if intent == "reschedule" or state.get("is_rescheduling"):
+    # Don't trigger if we're already mid-booking (Gemini can mis-classify a bare time like
+    # "monday at 10am" as reschedule when the user is just answering "what time do you want?")
+    _mid_booking = state.get("procedure") and not state.get("is_rescheduling")
+    if (intent == "reschedule" or state.get("is_rescheduling")) and not _mid_booking:
         procedure  = extracted.get("procedure")    or state.get("procedure")
         name       = extracted.get("patient_name") or state.get("patient_name")
         new_time   = extracted.get("datetime")     or (state.get("start_time") if state.get("is_rescheduling") else None)
@@ -421,6 +442,55 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 f"Type 'confirm' or 'no'."
             )
         }
+
+    # --- Early end intent ---
+    if intent == "early_end" and not state.get("procedure"):
+        name       = extracted.get("patient_name")
+        procedure  = extracted.get("procedure")
+        actual_end = extracted.get("datetime")
+
+        if not name:
+            return {"reply": "Which patient's appointment ended early? Please include their name, procedure, and the finish time."}
+        if not procedure:
+            return {"reply": f"Which procedure ended early for {name}? Also mention the finish time."}
+        if not actual_end:
+            return {"reply": f"What time did {name}'s {procedure.replace('_', ' ')} actually finish?"}
+
+        patient = db.query(Patient).filter_by(name=name).first()
+        if not patient:
+            return {"reply": f"No record found for '{name}'."}
+
+        appt = (
+            db.query(Appointment)
+            .filter(
+                Appointment.patient_id == patient.id,
+                Appointment.status == "scheduled",
+                Appointment.procedure == procedure,
+                Appointment.start_time <= datetime.now(),
+            )
+            .order_by(Appointment.start_time.desc())
+            .first()
+        )
+        if not appt:
+            return {"reply": f"No active appointment found for {name}'s {procedure.replace('_', ' ')}."}
+
+        if actual_end >= appt.end_time:
+            return {"reply": f"The finish time ({actual_end.strftime('%I:%M %p')}) is at or after the scheduled end ({appt.end_time.strftime('%I:%M %p')}). Please check the time."}
+        if actual_end <= appt.start_time:
+            return {"reply": f"The finish time must be after the appointment start ({appt.start_time.strftime('%I:%M %p')})."}
+
+        appt.actual_end_time = actual_end
+        appt.status          = "completed_early"
+        appt.completed_at    = datetime.now()
+        db.commit()
+
+        gap     = scheduler.compute_freed_gap(db, appt)
+        min_dur = scheduler.get_minimum_procedure_duration(db)
+
+        if gap >= min_dur:
+            wl.trigger_waitlist(db, appt.procedure, actual_end, appt.end_time)
+            return {"reply": f"Got it — {name}'s {procedure.replace('_', ' ')} marked as finished at {actual_end.strftime('%I:%M %p')}. {gap} minutes freed up and waitlist has been notified."}
+        return {"reply": f"Got it — {name}'s {procedure.replace('_', ' ')} marked as finished at {actual_end.strftime('%I:%M %p')}. The remaining {gap} minutes is too short to rebook (minimum is {min_dur} min)."}
 
     # --- Cancel intent ---
     if intent == "cancel":
@@ -630,6 +700,8 @@ def _appointment_read(a: Appointment, db: Session) -> AppointmentRead:
         status=a.status,
         start_time=a.start_time,
         end_time=a.end_time,
+        actual_end_time=a.actual_end_time,
+        completed_at=a.completed_at,
         buffer_minutes=buf,
         patient=a.patient,
         doctor=a.doctor,
@@ -661,6 +733,37 @@ def cancel_appointment(appointment_id: int, db: Session = Depends(get_db)):
     wl.trigger_waitlist(db, appt.procedure, appt.start_time, appt.end_time)
     db.refresh(appt)
     return _appointment_read(appt, db)
+
+
+@app.post("/appointments/{appointment_id}/end-early")
+def end_appointment_early(appointment_id: int, body: EarlyEndRequest, db: Session = Depends(get_db)):
+    appt = db.get(Appointment, appointment_id)
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found.")
+    if appt.status != "scheduled":
+        raise HTTPException(status_code=400, detail="Appointment is not currently scheduled.")
+    if body.actual_end_time >= appt.end_time:
+        raise HTTPException(status_code=400, detail="actual_end_time must be before the scheduled end_time.")
+    if body.actual_end_time <= appt.start_time:
+        raise HTTPException(status_code=400, detail="actual_end_time must be after start_time.")
+
+    appt.actual_end_time = body.actual_end_time
+    appt.status          = "completed_early"
+    appt.completed_at    = datetime.now()
+    db.commit()
+
+    gap     = scheduler.compute_freed_gap(db, appt)
+    min_dur = scheduler.get_minimum_procedure_duration(db)
+
+    if gap >= min_dur:
+        wl.trigger_waitlist(db, appt.procedure, body.actual_end_time, appt.end_time)
+        return {"status": "completed_early", "freed_minutes": gap, "waitlist_triggered": True}
+    return {
+        "status": "completed_early",
+        "freed_minutes": gap,
+        "waitlist_triggered": False,
+        "reason": f"Gap of {gap} min is less than shortest procedure ({min_dur} min) — slot not reopened.",
+    }
 
 
 # ---------------------------------------------------------------------------
